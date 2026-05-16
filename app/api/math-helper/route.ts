@@ -5,8 +5,8 @@ import { GoogleGenAI } from "@google/genai";
 export type Mode = "stuck" | "review" | "concept" | "optimize";
 
 const MODEL: Record<Mode, string> = {
-  stuck: "gemini-2.5-pro",
-  optimize: "gemini-2.5-pro",
+  stuck: "gemini-2.5-flash",
+  optimize: "gemini-2.5-flash",
   review: "gemini-2.5-flash",
   concept: "gemini-2.5-flash",
 };
