@@ -4,7 +4,7 @@ import "katex/dist/katex.min.css";
 import { Sidebar } from "@/components/sidebar";
 
 export const metadata: Metadata = {
-  title: "수능 분석기",
+  title: "훈제오리 스터디",
   description: "수능 모의고사 오답 노트 & 점수 추이 분석",
 };
 

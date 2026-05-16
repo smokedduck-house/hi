@@ -1,24 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronUp, CheckCircle2, Zap } from "lucide-react";
 
+// ── 타입 ──────────────────────────────────────────────────────
 type Unit = { id: string; subjectName: string; optionName: string | null; name: string };
 
-type QuestionInput = {
-  number: string;
-  unit: string;
-  topic: string;
-  difficulty: "상" | "중" | "하";
-  isCorrect: boolean;
-  wrongType: string;
-  memo: string;
+type ExamDataQuestion = {
+  number: number;
+  answer: string | null;
+  score: number;
+  correctRate: number | null;
 };
+type ExamDataSubject = {
+  name: string;
+  selectOption: string | null;
+  cutoffs: Record<string, { rawScore?: number; standardScore?: number }> | null;
+  questions: ExamDataQuestion[];
+};
+type ExamDataEntry = { name: string; year: number; type: string; subjects: ExamDataSubject[] };
+type ExamData = { exams: ExamDataEntry[] };
+
+type GradeResult = { number: number; correct: string; mine: string; isCorrect: boolean; score: number };
+
+type Timings = { hwajak: string; munhak: string; dokso: string };
 
 type SubjectInput = {
   name: string;
@@ -28,99 +38,231 @@ type SubjectInput = {
   percentile: string;
   grade: string;
   maxRawScore: string;
-  questions: QuestionInput[];
+  // 오답 (수동 모드)
+  wrongNumbers: string; // 쉼표 구분 "3,7,15"
+  // 자동채점
+  myAnswers: Record<string, string>;
+  gradeResults: GradeResult[] | null;
+  // 정답지 입력 (수동)
+  answerKeyCount: string; // 총 문항 수
+  answerKey: Record<string, string>; // { "1": "3", "2": "1", ... }
+  // 국어 시간
+  timings: Timings;
   expanded: boolean;
 };
 
-const SUBJECT_OPTIONS: Record<string, string[]> = {
-  국어: ["공통", "언어와매체", "화법과작문"],
-  수학: ["공통", "미적분", "확률과통계", "기하"],
-  영어: ["공통"],
-  한국사: ["공통"],
-  사탐: ["생활과윤리", "윤리와사상", "한국지리", "세계지리", "동아시아사", "세계사", "경제", "정치와법", "사회문화"],
-  과탐: ["물리학I", "물리학II", "화학I", "화학II", "생명과학I", "생명과학II", "지구과학I", "지구과학II"],
+// ── 상수 ──────────────────────────────────────────────────────
+const TYPES = ["평가원", "교육청", "사설"] as const;
+type ExamType = (typeof TYPES)[number];
+
+const MONTHS_BY_TYPE: Record<ExamType, number[]> = {
+  평가원: [6, 9, 11],
+  교육청: [3, 4, 7, 10, 11],
+  사설: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
 };
 
-const WRONG_TYPES = ["개념부족", "실수", "시간부족", "문제이해실패"];
-const DIFFICULTIES = ["상", "중", "하"] as const;
+const YEARS = [2023, 2024, 2025, 2026, 2027];
 
+const SUBJECT_OPTIONS: Record<string, string[]> = {
+  국어: ["화법과작문"],
+  수학: ["미적분"],
+  영어: ["공통"],
+  한국사: ["공통"],
+  탐구: ["한국지리", "지구과학"],
+};
+
+// ── 시험명/날짜 생성 ───────────────────────────────────────────
+function buildExamInfo(type: ExamType | "", year: number | null, month: number | null) {
+  if (!type || !year || !month) return null;
+  if (type === "평가원") {
+    const cy = year - 1;
+    if (month === 11) return { name: `${year}학년도 수능`, date: `${cy}-11-15` };
+    return { name: `${year}학년도 ${month}월 모의평가`, date: `${cy}-${String(month).padStart(2, "0")}-01` };
+  }
+  if (type === "교육청") {
+    return { name: `${year}년 ${month}월 전국연합학력평가`, date: `${year}-${String(month).padStart(2, "0")}-01` };
+  }
+  return { name: `${year}년 ${month}월 사설모의고사`, date: `${year}-${String(month).padStart(2, "0")}-01` };
+}
+
+// ── exam_data.json에서 매칭 찾기 ─────────────────────────────
+function findExamEntry(data: ExamData | null, year: number, month: number, type: ExamType): ExamDataEntry | null {
+  if (!data || type !== "평가원") return null;
+  const examType = month === 11 ? "수능" : `${month}월 모평`;
+  return data.exams.find((e) => e.year === year && e.type === examType) ?? null;
+}
+
+function findSubjectEntry(entry: ExamDataEntry | null, name: string, optionName: string): ExamDataSubject | null {
+  if (!entry) return null;
+  // 탐구 과목은 exam_data.json에서 subject name이 optionName 그 자체 (한국지리, 지구과학I 등)
+  if (name === "탐구") {
+    return entry.subjects.find(
+      (s) => s.name === optionName || s.name === optionName + "I"
+    ) ?? null;
+  }
+  return (
+    entry.subjects.find(
+      (s) =>
+        s.name === name &&
+        (optionName === "" || optionName === "공통" || s.selectOption === optionName)
+    ) ?? null
+  );
+}
+
+// ── 기본값 ────────────────────────────────────────────────────
 function defaultSubject(name: string): SubjectInput {
+  const opts = SUBJECT_OPTIONS[name] ?? [];
+  const autoOption = opts.length === 1 && opts[0] !== "공통" ? opts[0] : "";
   return {
     name,
-    optionName: "",
+    optionName: autoOption,
     rawScore: "",
     standardScore: "",
     percentile: "",
     grade: "",
-    maxRawScore: name === "탐구1" || name === "탐구2" ? "50" : "100",
-    questions: [],
+    maxRawScore: name === "탐구" ? "50" : "100",
+    wrongNumbers: "",
+    myAnswers: {},
+    gradeResults: null,
+    answerKeyCount: "",
+    answerKey: {},
+    timings: { hwajak: "", munhak: "", dokso: "" },
     expanded: true,
   };
 }
 
-function defaultQuestion(): QuestionInput {
-  return { number: "", unit: "", topic: "", difficulty: "중", isCorrect: false, wrongType: "", memo: "" };
+// ── 칩 컴포넌트 ───────────────────────────────────────────────
+function Chip({ label, selected, onClick, size = "sm" }: { label: string; selected: boolean; onClick: () => void; size?: "sm" | "md" }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border font-medium transition-all whitespace-nowrap ${size === "md" ? "px-4 py-1.5 text-sm" : "px-3 py-1 text-xs"}`}
+      style={{
+        borderColor: selected ? "var(--primary)" : "var(--border)",
+        background: selected ? "var(--primary)" : "transparent",
+        color: selected ? "var(--primary-foreground)" : "var(--muted-foreground)",
+      }}
+    >
+      {label}
+    </button>
+  );
 }
 
+// ── 답안 셀 ──────────────────────────────────────────────────
+function AnswerCell({ num, value, onChange, highlight, readOnly, autoAdvance }: {
+  num: number; value: string; onChange?: (v: string) => void;
+  highlight?: "correct" | "wrong" | "correct-answer"; readOnly?: boolean;
+  autoAdvance?: boolean;
+}) {
+  const bg =
+    highlight === "correct" ? "rgba(16,185,129,0.15)" :
+    highlight === "wrong"   ? "rgba(239,68,68,0.15)"  :
+    highlight === "correct-answer" ? "rgba(99,102,241,0.1)" :
+    "var(--muted)";
+  const border =
+    highlight === "correct" ? "#10b981" :
+    highlight === "wrong"   ? "#ef4444"  :
+    highlight === "correct-answer" ? "#6366f1" :
+    "var(--border)";
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const v = e.target.value.replace(/[^0-9]/g, "");
+    onChange?.(v);
+    if (autoAdvance && v.length === 1) {
+      const container = e.target.closest(".answer-cells");
+      if (container) {
+        const inputs = Array.from(container.querySelectorAll<HTMLInputElement>("input[data-cell]"));
+        const idx = inputs.indexOf(e.target);
+        if (idx !== -1 && idx + 1 < inputs.length) inputs[idx + 1].focus();
+      }
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="text-[0.6rem]" style={{ color: "var(--muted-foreground)" }}>{num}</span>
+      <input
+        readOnly={readOnly}
+        type="text"
+        maxLength={4}
+        value={value}
+        data-cell={autoAdvance ? "1" : undefined}
+        onChange={handleChange}
+        className="w-9 h-8 text-center text-xs font-bold rounded border outline-none transition-colors"
+        style={{ background: bg, borderColor: border, color: "var(--foreground)", cursor: readOnly ? "default" : "text" }}
+      />
+    </div>
+  );
+}
+
+// ── 메인 컴포넌트 ─────────────────────────────────────────────
 export function ExamNewClient({ units }: { units: Unit[] }) {
   const router = useRouter();
-  const [name, setName] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [type, setType] = useState("평가원");
-  const [grade, setGrade] = useState("고3");
+
+  const [examType, setExamType] = useState<ExamType | "">("");
+  const [year, setYear] = useState<number | null>(null);
+  const [month, setMonth] = useState<number | null>(null);
   const [subjects, setSubjects] = useState<SubjectInput[]>([]);
+  const [examData, setExamData] = useState<ExamData | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  function addSubject(subName: string) {
-    if (subjects.find((s) => s.name === subName)) return;
-    setSubjects((prev) => [...prev, defaultSubject(subName)]);
-  }
+  // exam_data.json 로드
+  useEffect(() => {
+    fetch("/exam_data.json")
+      .then((r) => r.json())
+      .then(setExamData)
+      .catch(() => {});
+  }, []);
 
-  function removeSubject(idx: number) {
-    setSubjects((prev) => prev.filter((_, i) => i !== idx));
-  }
+  const examInfo = useMemo(() => buildExamInfo(examType, year, month), [examType, year, month]);
+  const examEntry = useMemo(
+    () => (examType && year && month ? findExamEntry(examData, year, month, examType as ExamType) : null),
+    [examData, examType, year, month]
+  );
 
+  const availableMonths = examType ? MONTHS_BY_TYPE[examType as ExamType] : [];
+
+  function handleTypeSelect(t: ExamType) { setExamType(t); setMonth(null); }
+  function handleYearSelect(y: number) { setYear(y); setMonth(null); }
+
+  // 과목 관리
+  function addSubject(name: string) {
+    if (name !== "탐구" && subjects.find((s) => s.name === name)) return;
+    if (name === "탐구" && subjects.filter((s) => s.name === "탐구").length >= 2) return;
+    setSubjects((p) => [...p, defaultSubject(name)]);
+  }
+  function removeSubject(idx: number) { setSubjects((p) => p.filter((_, i) => i !== idx)); }
   function updateSubject(idx: number, patch: Partial<SubjectInput>) {
-    setSubjects((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+    setSubjects((p) => p.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
   }
 
-  function addQuestion(subIdx: number) {
-    setSubjects((prev) =>
-      prev.map((s, i) => (i === subIdx ? { ...s, questions: [...s.questions, defaultQuestion()] } : s))
-    );
+  // 자동채점 실행
+  function runGrade(subIdx: number) {
+    const sub = subjects[subIdx];
+    const subEntry = findSubjectEntry(examEntry, sub.name, sub.optionName);
+    if (!subEntry) return;
+
+    const results: GradeResult[] = subEntry.questions.map((q) => {
+      const correct = q.answer ?? "";
+      const mine = sub.myAnswers[String(q.number)] ?? "";
+      const isCorrect = correct !== "" && mine !== "" && correct === mine;
+      return { number: q.number, correct, mine, isCorrect, score: q.score };
+    });
+
+    const rawScore = results.reduce((s, r) => s + (r.isCorrect ? r.score : 0), 0);
+    updateSubject(subIdx, {
+      gradeResults: results,
+      rawScore: String(rawScore),
+    });
   }
 
-  function removeQuestion(subIdx: number, qIdx: number) {
-    setSubjects((prev) =>
-      prev.map((s, i) =>
-        i === subIdx ? { ...s, questions: s.questions.filter((_, qi) => qi !== qIdx) } : s
-      )
-    );
-  }
-
-  function updateQuestion(subIdx: number, qIdx: number, patch: Partial<QuestionInput>) {
-    setSubjects((prev) =>
-      prev.map((s, i) =>
-        i === subIdx
-          ? { ...s, questions: s.questions.map((q, qi) => (qi === qIdx ? { ...q, ...patch } : q)) }
-          : s
-      )
-    );
-  }
-
-  function getUnitsForSubject(sub: SubjectInput) {
-    return units.filter(
-      (u) =>
-        u.subjectName === sub.name &&
-        (u.optionName === null || u.optionName === sub.optionName || sub.optionName === "공통" || sub.optionName === "")
-    );
-  }
-
+  // 제출
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!name || !date) { setError("시험명과 날짜를 입력해주세요."); return; }
+    if (!examInfo) { setError("기관·연도·월을 선택해주세요."); return; }
     if (subjects.length === 0) { setError("과목을 1개 이상 추가해주세요."); return; }
 
     setSubmitting(true);
@@ -129,30 +271,80 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name, date, type, grade,
-          subjects: subjects.map((s) => ({
-            name: s.name,
-            optionName: s.optionName || null,
-            rawScore: s.rawScore ? Number(s.rawScore) : null,
-            standardScore: s.standardScore ? Number(s.standardScore) : null,
-            percentile: s.percentile ? Number(s.percentile) : null,
-            grade: s.grade ? Number(s.grade) : null,
-            maxRawScore: Number(s.maxRawScore) || 100,
-            questions: s.questions
-              .filter((q) => q.number)
-              .map((q) => ({
-                number: Number(q.number),
-                unit: q.unit,
-                topic: q.topic || null,
-                difficulty: q.difficulty,
-                isCorrect: q.isCorrect,
-                wrongType: q.wrongType || null,
-                memo: q.memo || null,
-              })),
-          })),
+          name: examInfo.name,
+          date: examInfo.date,
+          type: examType,
+          grade: "",
+          subjects: subjects.map((s) => {
+            const subEntry = findSubjectEntry(examEntry, s.name, s.optionName);
+            // 오답 문항 목록 구성
+            let questions: object[] = [];
+            if (subEntry && s.gradeResults) {
+              questions = s.gradeResults
+                .filter((r) => !r.isCorrect && r.mine !== "")
+                .map((r) => ({
+                  number: r.number,
+                  unit: "",
+                  difficulty: "중",
+                  isCorrect: false,
+                  wrongType: null,
+                  memo: null,
+                }));
+            } else {
+              questions = s.wrongNumbers
+                .split(/[,\s]+/)
+                .map((n) => n.trim())
+                .filter((n) => /^\d+$/.test(n))
+                .map((n) => ({
+                  number: Number(n),
+                  unit: "",
+                  difficulty: "중",
+                  isCorrect: false,
+                }));
+            }
+            const notes =
+              s.name === "국어" && (s.timings.hwajak || s.timings.munhak || s.timings.dokso)
+                ? JSON.stringify({ timings: s.timings })
+                : null;
+            return {
+              name: s.name,
+              optionName: s.optionName || null,
+              rawScore: s.rawScore ? Number(s.rawScore) : null,
+              standardScore: s.standardScore ? Number(s.standardScore) : null,
+              percentile: s.percentile ? Number(s.percentile) : null,
+              grade: s.grade ? Number(s.grade) : null,
+              maxRawScore: Number(s.maxRawScore) || 100,
+              notes,
+              questions,
+            };
+          }),
         }),
       });
       if (!res.ok) throw new Error("저장 실패");
+      const exam = await res.json();
+
+      // 정답지 저장 (수동 입력된 과목만)
+      const keyPromises = subjects
+        .filter((s) => {
+          const count = Number(s.answerKeyCount);
+          return count > 0 && Object.keys(s.answerKey).length > 0;
+        })
+        .map((s) =>
+          fetch("/api/answer-key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              examId: exam.id,
+              subjectName: s.name,
+              optionName: s.optionName || null,
+              answers: s.answerKey,
+              scores: null,
+              totalCount: Number(s.answerKeyCount),
+            }),
+          })
+        );
+      await Promise.all(keyPromises);
+
       router.push("/");
     } catch {
       setError("저장 중 오류가 발생했습니다.");
@@ -161,262 +353,376 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
     }
   }
 
-  const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
-  const inputStyle = {
-    background: "var(--muted)",
-    borderColor: "var(--border)",
-    color: "var(--foreground)",
-  };
-  const labelStyle = { color: "var(--muted-foreground)", fontSize: "0.75rem", fontWeight: 500 };
+  const inputStyle = { background: "var(--muted)", borderColor: "var(--border)", color: "var(--foreground)" };
+  const labelStyle = { color: "var(--muted-foreground)", fontSize: "0.7rem", fontWeight: 600, letterSpacing: "0.03em" };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 max-w-3xl">
+    <form onSubmit={handleSubmit} className="space-y-5 max-w-2xl">
       <div>
         <h2 className="text-2xl font-bold">모의고사 입력</h2>
         <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
-          회차 정보와 과목별 성적·오답을 입력하세요.
+          선택하면 자동 완성됩니다.
         </p>
       </div>
 
-      {/* 회차 정보 */}
-      <div className="rounded-xl border p-5 space-y-4" style={cardStyle}>
-        <h3 className="font-semibold">회차 정보</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="col-span-2 space-y-1">
-            <label style={labelStyle}>시험명</label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="예: 2025학년도 6월 모의평가"
-              style={inputStyle}
-            />
-          </div>
-          <div className="space-y-1">
-            <label style={labelStyle}>날짜</label>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
-          </div>
-          <div className="space-y-1">
-            <label style={labelStyle}>학년</label>
-            <select
-              value={grade}
-              onChange={(e) => setGrade(e.target.value)}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-              style={inputStyle}
-            >
-              {["고1", "고2", "고3", "N수"].map((g) => <option key={g}>{g}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label style={labelStyle}>시험 종류</label>
-            <select
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-              style={inputStyle}
-            >
-              {["평가원", "교육청", "사설"].map((t) => <option key={t}>{t}</option>)}
-            </select>
+      {/* ── 기관 / 연도 / 월 가로 배치 ── */}
+      <div
+        className="rounded-2xl border p-5 grid grid-cols-3 gap-6"
+        style={{ background: "var(--card)", borderColor: "var(--border)" }}
+      >
+        {/* 기관 */}
+        <div className="space-y-2">
+          <p style={labelStyle}>기관</p>
+          <div className="flex flex-col gap-1.5">
+            {TYPES.map((t) => (
+              <Chip key={t} label={t} size="md" selected={examType === t} onClick={() => handleTypeSelect(t)} />
+            ))}
           </div>
         </div>
-      </div>
 
-      {/* 과목 추가 */}
-      <div className="rounded-xl border p-5 space-y-3" style={cardStyle}>
-        <h3 className="font-semibold">과목 추가</h3>
-        <div className="flex flex-wrap gap-2">
-          {Object.keys(SUBJECT_OPTIONS).map((sub) => (
-            <button
-              key={sub}
-              type="button"
-              onClick={() => addSubject(sub)}
-              className="px-3 py-1 rounded-full text-sm border transition-colors"
-              style={{
-                borderColor: subjects.find((s) => s.name === sub) ? "var(--primary)" : "var(--border)",
-                background: subjects.find((s) => s.name === sub) ? "var(--primary)" : "transparent",
-                color: subjects.find((s) => s.name === sub) ? "var(--primary-foreground)" : "var(--foreground)",
-              }}
-            >
-              {sub}
-            </button>
-          ))}
+        {/* 연도 */}
+        <div className="space-y-2">
+          <p style={labelStyle}>{examType === "평가원" ? "학년도" : "연도"}</p>
+          <div className="flex flex-col gap-1.5">
+            {YEARS.map((y) => (
+              <Chip
+                key={y}
+                label={String(y)}
+                size="md"
+                selected={year === y}
+                onClick={() => handleYearSelect(y)}
+              />
+            ))}
+          </div>
         </div>
-      </div>
 
-      {/* 각 과목 입력 */}
-      {subjects.map((sub, subIdx) => {
-        const availableUnits = getUnitsForSubject(sub);
-        return (
-          <div key={subIdx} className="rounded-xl border" style={cardStyle}>
-            <div
-              className="flex items-center justify-between px-5 py-4 cursor-pointer"
-              onClick={() => updateSubject(subIdx, { expanded: !sub.expanded })}
-            >
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">{sub.name}</h3>
-                {sub.optionName && <Badge variant="secondary">{sub.optionName}</Badge>}
-                {sub.grade && (
-                  <span className="text-xs px-1.5 py-0.5 rounded text-white" style={{ background: "#3b82f6" }}>
-                    {sub.grade}등급
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeSubject(subIdx); }}
-                  className="p-1 rounded hover:bg-red-50"
-                >
-                  <Trash2 size={14} style={{ color: "var(--destructive)" }} />
-                </button>
-                {sub.expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </div>
+        {/* 월 */}
+        <div className="space-y-2">
+          <p style={labelStyle}>월</p>
+          {examType ? (
+            <div className="flex flex-col gap-1.5">
+              {availableMonths.map((m) => (
+                <Chip
+                  key={m}
+                  label={examType === "평가원" && m === 11 ? "11월 수능" : `${m}월`}
+                  size="md"
+                  selected={month === m}
+                  onClick={() => setMonth(m)}
+                />
+              ))}
             </div>
+          ) : (
+            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>기관 먼저 선택</p>
+          )}
+        </div>
+      </div>
 
-            {sub.expanded && (
-              <div className="px-5 pb-5 space-y-4 border-t pt-4" style={{ borderColor: "var(--border)" }}>
-                {/* 선택과목 */}
-                {SUBJECT_OPTIONS[sub.name] && SUBJECT_OPTIONS[sub.name].length > 1 && (
-                  <div className="space-y-1">
-                    <label style={labelStyle}>선택과목</label>
-                    <select
-                      value={sub.optionName}
-                      onChange={(e) => updateSubject(subIdx, { optionName: e.target.value, questions: [] })}
-                      className="w-full rounded-md border px-3 py-2 text-sm"
-                      style={inputStyle}
-                    >
-                      <option value="">선택...</option>
-                      {SUBJECT_OPTIONS[sub.name].map((opt) => <option key={opt}>{opt}</option>)}
-                    </select>
-                  </div>
-                )}
-
-                {/* 성적 입력 */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {[
-                    { label: "원점수", key: "rawScore", placeholder: "0" },
-                    { label: "표준점수", key: "standardScore", placeholder: "0" },
-                    { label: "백분위", key: "percentile", placeholder: "0.0" },
-                    { label: "등급", key: "grade", placeholder: "1~9" },
-                  ].map(({ label, key, placeholder }) => (
-                    <div key={key} className="space-y-1">
-                      <label style={labelStyle}>{label}</label>
-                      <Input
-                        type="number"
-                        value={(sub as unknown as Record<string, string>)[key]}
-                        onChange={(e) => updateSubject(subIdx, { [key]: e.target.value })}
-                        placeholder={placeholder}
-                        style={inputStyle}
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                {/* 오답 문항 */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label style={labelStyle}>오답 문항 ({sub.questions.filter((q) => !q.isCorrect).length}개)</label>
-                    <button
-                      type="button"
-                      onClick={() => addQuestion(subIdx)}
-                      className="flex items-center gap-1 text-xs px-2 py-1 rounded"
-                      style={{ background: "var(--muted)", color: "var(--foreground)" }}
-                    >
-                      <Plus size={12} /> 문항 추가
-                    </button>
-                  </div>
-
-                  {sub.questions.map((q, qIdx) => (
-                    <div
-                      key={qIdx}
-                      className="rounded-lg border p-3 space-y-2"
-                      style={{ borderColor: "var(--border)", background: "var(--muted)" }}
-                    >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <div className="w-16">
-                          <Input
-                            type="number"
-                            value={q.number}
-                            onChange={(e) => updateQuestion(subIdx, qIdx, { number: e.target.value })}
-                            placeholder="번호"
-                            style={inputStyle}
-                          />
-                        </div>
-                        <select
-                          value={q.unit}
-                          onChange={(e) => updateQuestion(subIdx, qIdx, { unit: e.target.value })}
-                          className="flex-1 rounded-md border px-2 py-2 text-sm min-w-32"
-                          style={inputStyle}
-                        >
-                          <option value="">단원 선택</option>
-                          {availableUnits.map((u) => (
-                            <option key={u.id} value={u.name}>{u.name}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={q.difficulty}
-                          onChange={(e) => updateQuestion(subIdx, qIdx, { difficulty: e.target.value as "상" | "중" | "하" })}
-                          className="w-16 rounded-md border px-2 py-2 text-sm"
-                          style={inputStyle}
-                        >
-                          {DIFFICULTIES.map((d) => <option key={d}>{d}</option>)}
-                        </select>
-                        <label className="flex items-center gap-1 text-sm cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={q.isCorrect}
-                            onChange={(e) => updateQuestion(subIdx, qIdx, { isCorrect: e.target.checked })}
-                          />
-                          맞음
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => removeQuestion(subIdx, qIdx)}
-                        >
-                          <Trash2 size={13} style={{ color: "var(--destructive)" }} />
-                        </button>
-                      </div>
-                      {!q.isCorrect && (
-                        <div className="flex gap-2 flex-wrap">
-                          {WRONG_TYPES.map((wt) => (
-                            <button
-                              key={wt}
-                              type="button"
-                              onClick={() => updateQuestion(subIdx, qIdx, { wrongType: q.wrongType === wt ? "" : wt })}
-                              className="text-xs px-2 py-0.5 rounded-full border"
-                              style={{
-                                background: q.wrongType === wt ? "var(--primary)" : "transparent",
-                                color: q.wrongType === wt ? "var(--primary-foreground)" : "var(--foreground)",
-                                borderColor: q.wrongType === wt ? "var(--primary)" : "var(--border)",
-                              }}
-                            >
-                              {wt}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <Textarea
-                        value={q.memo}
-                        onChange={(e) => updateQuestion(subIdx, qIdx, { memo: e.target.value })}
-                        placeholder="분석 메모 (선택)"
-                        rows={2}
-                        style={{ ...inputStyle, fontSize: "0.75rem" }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+      {/* 시험명 미리보기 */}
+      {examInfo && (
+        <div
+          className="rounded-2xl px-5 py-3.5 flex items-center justify-between"
+          style={{ background: "var(--primary)", color: "var(--primary-foreground)" }}
+        >
+          <div className="flex items-center gap-2">
+            {examEntry && (
+              <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium"
+                style={{ background: "rgba(255,255,255,0.2)" }}>
+                <Zap size={10} /> 자동채점 가능
+              </span>
             )}
+            <p className="font-bold">{examInfo.name}</p>
           </div>
-        );
-      })}
-
-      {error && (
-        <p className="text-sm" style={{ color: "var(--destructive)" }}>{error}</p>
+          <p className="text-sm opacity-70">{examInfo.date}</p>
+        </div>
       )}
 
-      <Button type="submit" disabled={submitting} className="w-full">
-        {submitting ? "저장 중..." : "모의고사 저장"}
-      </Button>
+      {/* ── 과목 추가 ── */}
+      {examInfo && (
+        <>
+          <div
+            className="rounded-2xl border p-5 space-y-3"
+            style={{ background: "var(--card)", borderColor: "var(--border)" }}
+          >
+            <p style={labelStyle}>과목 추가</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.keys(SUBJECT_OPTIONS).map((sub) => {
+                const count = subjects.filter((s) => s.name === sub).length;
+                const maxed = sub === "탐구" ? count >= 2 : count >= 1;
+                return (
+                  <button
+                    key={sub}
+                    type="button"
+                    onClick={() => {
+                      if (sub === "탐구") {
+                        if (!maxed) addSubject(sub);
+                      } else {
+                        if (count > 0) removeSubject(subjects.findIndex((s) => s.name === sub));
+                        else addSubject(sub);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-full text-sm border font-medium transition-all"
+                    style={{
+                      borderColor: count > 0 ? "var(--primary)" : "var(--border)",
+                      background: count > 0 ? "var(--primary)" : "transparent",
+                      color: count > 0 ? "var(--primary-foreground)" : "var(--foreground)",
+                    }}
+                  >
+                    {sub === "탐구"
+                      ? count === 0 ? `+ ${sub}` : count === 1 ? `✓ ${sub} (1) +` : `✓ ${sub} (2)`
+                      : count > 0 ? `✓ ${sub}` : `+ ${sub}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── 각 과목 카드 ── */}
+          {subjects.map((sub, subIdx) => {
+            const subEntry = findSubjectEntry(examEntry, sub.name, sub.optionName);
+            const hasAutoGrade = !!subEntry;
+            const graded = !!sub.gradeResults;
+            const correctCount = sub.gradeResults?.filter((r) => r.isCorrect).length ?? 0;
+            const totalQ = subEntry?.questions.length ?? 0;
+            const rawFromGrade = sub.gradeResults?.reduce((s, r) => s + (r.isCorrect ? r.score : 0), 0) ?? 0;
+
+            return (
+              <div
+                key={subIdx}
+                className="rounded-2xl border overflow-hidden"
+                style={{ background: "var(--card)", borderColor: "var(--border)" }}
+              >
+                {/* 헤더 */}
+                <div
+                  className="flex items-center justify-between px-5 py-4 cursor-pointer select-none"
+                  onClick={() => updateSubject(subIdx, { expanded: !sub.expanded })}
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold">{sub.name}</span>
+                    {sub.optionName && <Badge variant="secondary">{sub.optionName}</Badge>}
+                    {hasAutoGrade && (
+                      <span className="flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>
+                        <Zap size={10} /> 자동채점
+                      </span>
+                    )}
+                    {graded && (
+                      <span className="text-xs font-bold" style={{ color: "#10b981" }}>
+                        {rawFromGrade}점 ({correctCount}/{totalQ})
+                      </span>
+                    )}
+                    {sub.grade && <span className="text-xs px-2 py-0.5 rounded-full text-white font-medium" style={{ background: "var(--primary)" }}>{sub.grade}등급</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={(e) => { e.stopPropagation(); removeSubject(subIdx); }}>
+                      <Trash2 size={14} style={{ color: "var(--destructive)" }} />
+                    </button>
+                    {sub.expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </div>
+                </div>
+
+                {sub.expanded && (
+                  <div className="border-t px-5 pb-5 space-y-5 pt-4" style={{ borderColor: "var(--border)" }}>
+
+                    {/* 선택과목 */}
+                    {SUBJECT_OPTIONS[sub.name]?.length > 1 && (
+                      <div className="space-y-2">
+                        <p style={labelStyle}>선택과목</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {SUBJECT_OPTIONS[sub.name].map((opt) => (
+                            <Chip key={opt} label={opt} size="sm" selected={sub.optionName === opt}
+                              onClick={() => updateSubject(subIdx, { optionName: opt, myAnswers: {}, gradeResults: null })} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── 자동채점 (exam_data.json 있을 때) ── */}
+                    {hasAutoGrade && subEntry && (
+                      <div className="space-y-3">
+                        <p style={labelStyle}>내 답 입력 (자동채점)</p>
+
+                        {/* 정답 & 내 답 그리드 */}
+                        <div className="space-y-2">
+                          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>정답</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {subEntry.questions.map((q) => (
+                              <AnswerCell key={q.number} num={q.number} value={q.answer ?? "?"} readOnly highlight="correct-answer" />
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>내 답</p>
+                          <div className="answer-cells flex flex-wrap gap-1.5">
+                            {subEntry.questions.map((q) => {
+                              const gr = sub.gradeResults?.find((r) => r.number === q.number);
+                              return (
+                                <AnswerCell
+                                  key={q.number}
+                                  num={q.number}
+                                  value={sub.myAnswers[String(q.number)] ?? ""}
+                                  onChange={(v) =>
+                                    updateSubject(subIdx, {
+                                      myAnswers: { ...sub.myAnswers, [String(q.number)]: v },
+                                      gradeResults: null,
+                                    })
+                                  }
+                                  highlight={gr ? (gr.isCorrect ? "correct" : "wrong") : undefined}
+                                  autoAdvance
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <Button type="button" size="sm" onClick={() => runGrade(subIdx)}>
+                          <CheckCircle2 size={13} className="mr-1" /> 채점하기
+                        </Button>
+
+                        {/* 채점 결과 */}
+                        {sub.gradeResults && (
+                          <div className="rounded-xl p-3 space-y-1" style={{ background: "var(--muted)" }}>
+                            <p className="text-sm font-bold">
+                              {rawFromGrade}점 · {correctCount}/{totalQ} 정답
+                            </p>
+                            {sub.gradeResults.filter((r) => !r.isCorrect && r.mine !== "").length > 0 && (
+                              <p className="text-xs" style={{ color: "var(--destructive)" }}>
+                                오답: {sub.gradeResults.filter((r) => !r.isCorrect && r.mine !== "").map((r) => `${r.number}번`).join(", ")}
+                              </p>
+                            )}
+                            {/* 등급컷 대조 */}
+                            {subEntry.cutoffs && (
+                              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+                                {Object.entries(subEntry.cutoffs)
+                                  .filter(([, v]) => v.rawScore !== undefined)
+                                  .sort((a, b) => Number(a[0]) - Number(b[0]))
+                                  .map(([g, v]) => `${g}등급 ${v.rawScore}점`)
+                                  .join(" / ")}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── 수동 점수 입력 ── */}
+                    <div className="space-y-2">
+                      <p style={labelStyle}>성적 {hasAutoGrade ? "(채점 후 자동 입력)" : ""}</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {[
+                          { label: "원점수", key: "rawScore", ph: "0" },
+                          { label: "표점", key: "standardScore", ph: "0" },
+                          { label: "백분위", key: "percentile", ph: "0.0" },
+                          { label: "등급", key: "grade", ph: "1~9" },
+                        ].map(({ label, key, ph }) => (
+                          <div key={key} className="space-y-1">
+                            <p style={{ ...labelStyle, fontSize: "0.65rem" }}>{label}</p>
+                            <Input
+                              type="number"
+                              value={(sub as unknown as Record<string, string>)[key]}
+                              onChange={(e) => updateSubject(subIdx, { [key]: e.target.value })}
+                              placeholder={ph}
+                              style={inputStyle}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* ── 정답지 입력 (수동 모드만) ── */}
+                    {!hasAutoGrade && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <p style={labelStyle}>정답지 입력</p>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>총 문항 수</span>
+                            <Input
+                              type="number"
+                              value={sub.answerKeyCount}
+                              onChange={(e) => {
+                                const count = Number(e.target.value);
+                                // 문항 수 변경 시 초과된 답안 정리
+                                const newKey = Object.fromEntries(
+                                  Object.entries(sub.answerKey).filter(([k]) => Number(k) <= count)
+                                );
+                                updateSubject(subIdx, { answerKeyCount: e.target.value, answerKey: newKey });
+                              }}
+                              placeholder="45"
+                              style={{ ...inputStyle, width: "4rem" }}
+                            />
+                          </div>
+                        </div>
+                        {Number(sub.answerKeyCount) > 0 && (
+                          <div className="answer-cells flex flex-wrap gap-1.5">
+                            {Array.from({ length: Number(sub.answerKeyCount) }, (_, i) => i + 1).map((n) => (
+                              <AnswerCell
+                                key={n}
+                                num={n}
+                                value={sub.answerKey[String(n)] ?? ""}
+                                onChange={(v) =>
+                                  updateSubject(subIdx, { answerKey: { ...sub.answerKey, [String(n)]: v } })
+                                }
+                                autoAdvance
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── 오답 번호 (수동 모드만) ── */}
+                    {!hasAutoGrade && (
+                      <div className="space-y-2">
+                        <p style={labelStyle}>오답 문항 번호</p>
+                        <Input
+                          value={sub.wrongNumbers}
+                          onChange={(e) => updateSubject(subIdx, { wrongNumbers: e.target.value })}
+                          placeholder="예: 3, 7, 15, 29"
+                          style={inputStyle}
+                        />
+                        <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>쉼표로 구분해서 입력</p>
+                      </div>
+                    )}
+
+                    {/* ── 국어 시간 기록 ── */}
+                    {sub.name === "국어" && (
+                      <div className="space-y-2">
+                        <p style={labelStyle}>영역별 소요시간 (분)</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(["hwajak", "munhak", "dokso"] as const).map((key) => {
+                            const labels = { hwajak: "화법·작문", munhak: "문학", dokso: "독서" };
+                            return (
+                              <div key={key} className="space-y-1">
+                                <p style={{ ...labelStyle, fontSize: "0.65rem" }}>{labels[key]}</p>
+                                <Input
+                                  type="number"
+                                  value={sub.timings[key]}
+                                  onChange={(e) =>
+                                    updateSubject(subIdx, { timings: { ...sub.timings, [key]: e.target.value } })
+                                  }
+                                  placeholder="0"
+                                  style={inputStyle}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {error && <p className="text-sm" style={{ color: "var(--destructive)" }}>{error}</p>}
+
+      {examInfo && (
+        <Button type="submit" disabled={submitting || subjects.length === 0} className="w-full rounded-xl py-3">
+          {submitting ? "저장 중..." : `${examInfo.name} 저장하기`}
+        </Button>
+      )}
     </form>
   );
 }

@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
       percentile?: number;
       grade?: number;
       maxRawScore?: number;
+      notes?: string;
       questions: Array<{
         number: number;
         unit: string;
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
           percentile: s.percentile,
           grade: s.grade,
           maxRawScore: s.maxRawScore ?? 100,
+          notes: s.notes ?? null,
           questions: {
             create: s.questions.map((q) => ({
               number: q.number,

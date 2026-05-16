@@ -9,7 +9,6 @@ import {
   BookOpen,
   AlertTriangle,
   Sparkles,
-  FileEdit,
 } from "lucide-react";
 
 const navItems = [
@@ -18,7 +17,6 @@ const navItems = [
   { href: "/trends", label: "점수 추이", icon: TrendingUp },
   { href: "/wrong-notes", label: "오답 노트", icon: BookOpen },
   { href: "/weakness", label: "취약점 분석", icon: AlertTriangle },
-  { href: "/errata", label: "정오표", icon: FileEdit },
   { href: "/math-helper", label: "AI 수학 도우미", icon: Sparkles },
 ];
 
@@ -32,7 +30,7 @@ export function Sidebar() {
     >
       <div className="mb-8 px-3">
         <h1 className="text-lg font-bold" style={{ color: "var(--primary)" }}>
-          수능 분석기
+          훈제오리 스터디
         </h1>
         <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>
           오답 노트 & 성적 추이

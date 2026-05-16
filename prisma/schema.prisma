@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // 모의고사 회차
@@ -32,6 +32,7 @@ model Subject {
   percentile      Float?  // 백분위
   grade           Int?    // 등급 (1~9)
   maxRawScore     Int     @default(100) // 만점 기준
+  notes           String? // JSON: 추가 데이터 (시간 기록 등)
 
   exam      Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
   questions Question[]
