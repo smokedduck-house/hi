@@ -719,11 +719,27 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
 
       {error && <p className="text-sm" style={{ color: "var(--destructive)" }}>{error}</p>}
 
+      {/* 하단 고정 저장 버튼 */}
       {examInfo && (
-        <Button type="submit" disabled={submitting || subjects.length === 0} className="w-full rounded-xl py-3">
-          {submitting ? "저장 중..." : `${examInfo.name} 저장하기`}
-        </Button>
+        <div
+          className="fixed bottom-0 left-56 right-0 px-6 py-4 z-50 flex items-center justify-between gap-4"
+          style={{ background: "var(--background)", borderTop: "1px solid var(--border)" }}
+        >
+          <p className="text-sm font-medium" style={{ color: "var(--muted-foreground)" }}>
+            {subjects.length === 0 ? "과목을 추가해주세요" : `${subjects.length}개 과목`}
+          </p>
+          <Button
+            type="submit"
+            disabled={submitting || subjects.length === 0}
+            className="rounded-xl px-8 py-2"
+          >
+            {submitting ? "저장 중..." : `${examInfo.name} 저장`}
+          </Button>
+        </div>
       )}
+
+      {/* 고정 버튼 공간 확보 */}
+      {examInfo && <div className="h-20" />}
     </form>
   );
 }
