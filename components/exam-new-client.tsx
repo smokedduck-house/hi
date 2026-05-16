@@ -313,9 +313,24 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
     });
 
     const rawScore = results.reduce((s, r) => s + (r.isCorrect ? r.score : 0), 0);
+
+    // 컷오프로 등급 자동 계산
+    let grade = "";
+    if (subEntry.cutoffs) {
+      for (let g = 1; g <= 9; g++) {
+        const cut = subEntry.cutoffs[String(g)];
+        if (cut?.rawScore != null && rawScore >= cut.rawScore) {
+          grade = String(g);
+          break;
+        }
+      }
+      if (!grade) grade = "9";
+    }
+
     updateSubject(subIdx, {
       gradeResults: results,
       rawScore: String(rawScore),
+      ...(grade ? { grade } : {}),
     });
   }
 
