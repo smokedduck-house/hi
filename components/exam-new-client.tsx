@@ -569,6 +569,7 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
                                   }
                                   highlight={gr ? (gr.isCorrect ? "correct" : "wrong") : undefined}
                                   autoAdvance
+                                />
                               );
                             })}
                           </div>
