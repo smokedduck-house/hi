@@ -196,14 +196,75 @@ function AnswerCell({ num, value, onChange, highlight, readOnly, autoAdvance }: 
   );
 }
 
-// ── 메인 컴포넌트 ─────────────────────────────────────────────
-export function ExamNewClient({ units }: { units: Unit[] }) {
-  const router = useRouter();
+// ── DB에서 불러온 시험 타입 ───────────────────────────────────
+type ExamRecord = {
+  id: string;
+  name: string;
+  date: string;
+  type: string;
+  subjects: {
+    name: string;
+    optionName: string | null;
+    rawScore: number | null;
+    standardScore: number | null;
+    percentile: number | null;
+    grade: number | null;
+    maxRawScore: number;
+    notes: string | null;
+    questions: { number: number; unit: string; isCorrect: boolean; wrongType?: string | null; memo?: string | null }[];
+  }[];
+};
 
-  const [examType, setExamType] = useState<ExamType | "">("");
-  const [year, setYear] = useState<number | null>(null);
-  const [month, setMonth] = useState<number | null>(null);
-  const [subjects, setSubjects] = useState<SubjectInput[]>([]);
+function examToSubjectInputs(exam: ExamRecord): SubjectInput[] {
+  return exam.subjects.map((s) => {
+    const wrongNums = s.questions.filter((q) => !q.isCorrect).map((q) => q.number).join(", ");
+    let timings: Timings = { hwajak: "", munhak: "", dokso: "" };
+    if (s.notes) {
+      try { const n = JSON.parse(s.notes); if (n.timings) timings = n.timings; } catch {}
+    }
+    return {
+      name: s.name,
+      optionName: s.optionName ?? "",
+      rawScore: s.rawScore != null ? String(s.rawScore) : "",
+      standardScore: s.standardScore != null ? String(s.standardScore) : "",
+      percentile: s.percentile != null ? String(s.percentile) : "",
+      grade: s.grade != null ? String(s.grade) : "",
+      maxRawScore: String(s.maxRawScore),
+      wrongNumbers: wrongNums,
+      myAnswers: {},
+      gradeResults: null,
+      answerKeyCount: "",
+      answerKey: {},
+      timings,
+      expanded: true,
+    };
+  });
+}
+
+// ── 메인 컴포넌트 ─────────────────────────────────────────────
+export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialExam?: ExamRecord }) {
+  const router = useRouter();
+  const isEdit = !!initialExam;
+
+  // edit 모드일 때 초기값 추출
+  function parseExamDate(dateStr: string) {
+    const d = new Date(dateStr);
+    return { month: d.getUTCMonth() + 1, year: d.getUTCFullYear() };
+  }
+  function guessYear(exam: ExamRecord) {
+    const { month, year } = parseExamDate(exam.date);
+    // 평가원은 학년도 = 실제연도+1 (6월/9월), 학년도 = 실제연도+1 (11월)
+    if (exam.type === "평가원") return year + 1;
+    return year;
+  }
+  function guessMonth(exam: ExamRecord) {
+    return parseExamDate(exam.date).month;
+  }
+
+  const [examType, setExamType] = useState<ExamType | "">(isEdit ? (initialExam.type as ExamType) : "");
+  const [year, setYear] = useState<number | null>(isEdit ? guessYear(initialExam) : null);
+  const [month, setMonth] = useState<number | null>(isEdit ? guessMonth(initialExam) : null);
+  const [subjects, setSubjects] = useState<SubjectInput[]>(isEdit ? examToSubjectInputs(initialExam) : []);
   const [examData, setExamData] = useState<ExamData | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -267,8 +328,8 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
 
     setSubmitting(true);
     try {
-      const res = await fetch("/api/exams", {
-        method: "POST",
+      const res = await fetch(isEdit ? `/api/exams/${initialExam!.id}` : "/api/exams", {
+        method: isEdit ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: examInfo.name,
@@ -359,9 +420,9 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-5 max-w-2xl">
       <div>
-        <h2 className="text-2xl font-bold">모의고사 입력</h2>
+        <h2 className="text-2xl font-bold">{isEdit ? "모의고사 수정" : "모의고사 입력"}</h2>
         <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
-          선택하면 자동 완성됩니다.
+          {isEdit ? initialExam!.name : "선택하면 자동 완성됩니다."}
         </p>
       </div>
 
@@ -733,7 +794,7 @@ export function ExamNewClient({ units }: { units: Unit[] }) {
             disabled={submitting || subjects.length === 0}
             className="rounded-xl px-8 py-2"
           >
-            {submitting ? "저장 중..." : `${examInfo.name} 저장`}
+            {submitting ? "저장 중..." : isEdit ? "수정 완료" : `${examInfo.name} 저장`}
           </Button>
         </div>
       )}

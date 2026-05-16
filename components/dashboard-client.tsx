@@ -115,9 +115,13 @@ export function DashboardClient({ recentExams, topWrongUnits, wrongTypeDistribut
                         {new Date(exam.date).toLocaleDateString("ko-KR")} · {exam.type}
                       </p>
                     </div>
-                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
-                      {exam.grade}
-                    </span>
+                    <Link
+                      href={`/exams/${exam.id}/edit`}
+                      className="text-xs px-2 py-1 rounded-lg border transition-colors"
+                      style={{ borderColor: "var(--border)", color: "var(--muted-foreground)" }}
+                    >
+                      수정
+                    </Link>
                   </div>
                   <div className="space-y-1.5">
                     {exam.subjects.map((sub) => (
