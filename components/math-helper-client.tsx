@@ -365,12 +365,16 @@ export function MathHelperClient() {
     const res = await fetch("/api/math-problems", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, source, unit, aiNote, memo }),
+      body: JSON.stringify({
+        title, source, unit, aiNote, memo,
+        imageData: finalImage?.base64 ?? "",
+        mimeType: finalImage?.mimeType ?? "image/jpeg",
+      }),
     });
     const data = await res.json();
     setSavedId(data.id);
     setShowSaveDialog(false);
-  }, []);
+  }, [finalImage]);
 
   const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
 

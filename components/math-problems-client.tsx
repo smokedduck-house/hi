@@ -13,6 +13,7 @@ type Problem = {
   unit: string;
   aiNote: string;
   memo: string;
+  mimeType: string;
   createdAt: string;
 };
 
@@ -53,32 +54,38 @@ export function MathProblemsClient({ initialProblems }: { initialProblems: Probl
     setEditing(null);
   }
 
-  // 프린트 기반 PDF — 좌우 2열, 가운데 세로줄
-  function exportPDF() {
+  // 프린트 기반 PDF — 시험지 스타일 (좌우 문제 이미지, 가운데 세로줄, 아래 풀이 공간)
+  async function exportPDF() {
     const targets = problems.filter((p) => selected.size === 0 || selected.has(p.id));
     if (targets.length === 0) return;
 
-    // 2개씩 묶어서 페이지 구성
-    const pages: typeof targets[] = [];
-    for (let i = 0; i < targets.length; i += 2) pages.push(targets.slice(i, i + 2));
+    // 이미지 포함 전체 데이터 fetch
+    const full = await Promise.all(
+      targets.map((p) => fetch(`/api/math-problems/${p.id}`).then((r) => r.json()) as Promise<Problem & { imageData: string; mimeType: string }>)
+    );
 
-    function problemCell(p: Problem, idx: number) {
+    function cell(p: typeof full[0], num: number) {
+      const imgSrc = p.imageData ? `data:${p.mimeType};base64,${p.imageData}` : "";
       return `
         <div class="cell">
-          <div class="problem-num">${idx + 1}</div>
-          <div class="source">${p.source || "출처 미입력"}</div>
-          ${p.unit ? `<div class="unit">${p.unit}${p.title ? " · " + p.title : ""}</div>` : (p.title ? `<div class="unit">${p.title}</div>` : "")}
-          <div class="content">${(p.aiNote || "").replace(/\n/g, "<br>")}</div>
-          ${p.memo ? `<div class="memo">${p.memo.replace(/\n/g, "<br>")}</div>` : ""}
+          <div class="cell-header">
+            <span class="num">${num}.</span>
+            <span class="source">${p.source || ""}</span>
+            ${p.unit ? `<span class="unit">[${p.unit}]</span>` : ""}
+          </div>
+          ${imgSrc ? `<img class="prob-img" src="${imgSrc}" alt="문제 ${num}">` : '<div class="no-img">이미지 없음</div>'}
         </div>`;
     }
+
+    const pages: typeof full[] = [];
+    for (let i = 0; i < full.length; i += 2) pages.push(full.slice(i, i + 2));
 
     const pageHtml = pages.map((pair, pi) => `
       <div class="page${pi > 0 ? " break" : ""}">
         <div class="row">
-          ${problemCell(pair[0], pi * 2)}
-          <div class="divider"></div>
-          ${pair[1] ? problemCell(pair[1], pi * 2 + 1) : '<div class="cell"></div>'}
+          ${cell(pair[0], pi * 2 + 1)}
+          <div class="vline"></div>
+          ${pair[1] ? cell(pair[1], pi * 2 + 2) : '<div class="cell"></div>'}
         </div>
       </div>`).join("");
 
@@ -88,71 +95,70 @@ export function MathProblemsClient({ initialProblems }: { initialProblems: Probl
   <meta charset="UTF-8">
   <title>수학 오답 정리</title>
   <style>
-    @page { size: A4 portrait; margin: 12mm 10mm; }
+    @page { size: A4 portrait; margin: 10mm 8mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Nanum Gothic', sans-serif; color: #111; font-size: 10pt; }
+    body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; color: #111; }
 
-    .page { width: 100%; height: 100%; }
+    .page { width: 100%; }
     .break { page-break-before: always; }
 
     .row {
       display: flex;
       width: 100%;
-      height: 267mm; /* A4 height - margins */
-      gap: 0;
+      min-height: 277mm;
     }
 
     .cell {
       flex: 1;
-      padding: 4mm 6mm;
-      overflow: hidden;
+      padding: 5mm 6mm;
+      display: flex;
+      flex-direction: column;
     }
 
-    .divider {
-      width: 0;
-      border-left: 1px solid #888;
+    .vline {
+      width: 1px;
+      background: #555;
       flex-shrink: 0;
-      align-self: stretch;
     }
 
-    .problem-num {
-      font-size: 9pt;
-      font-weight: 700;
-      color: #999;
-      margin-bottom: 1mm;
+    .cell-header {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      margin-bottom: 3mm;
+      padding-bottom: 2mm;
+      border-bottom: 1px solid #ccc;
+    }
+
+    .num {
+      font-size: 11pt;
+      font-weight: 900;
+      color: #111;
     }
 
     .source {
-      font-size: 11pt;
-      font-weight: 700;
-      color: #111;
-      margin-bottom: 1.5mm;
-      padding-bottom: 1.5mm;
-      border-bottom: 1.5px solid #222;
+      font-size: 9pt;
+      color: #444;
+      font-weight: 600;
     }
 
     .unit {
-      font-size: 8.5pt;
-      color: #555;
-      margin-bottom: 3mm;
+      font-size: 8pt;
+      color: #888;
     }
 
-    .content {
-      font-size: 10pt;
-      line-height: 1.75;
-      color: #222;
-      white-space: pre-wrap;
-      word-break: break-word;
+    .prob-img {
+      width: 100%;
+      object-fit: contain;
+      object-position: top left;
+      max-height: 110mm;
     }
 
-    .memo {
-      margin-top: 4mm;
-      padding: 2mm 3mm;
-      background: #fffbeb;
-      border-left: 2px solid #f59e0b;
+    .no-img {
+      color: #bbb;
       font-size: 9pt;
-      color: #555;
-      line-height: 1.5;
+      text-align: center;
+      padding: 10mm 0;
     }
 
     @media print {
@@ -190,7 +196,7 @@ export function MathProblemsClient({ initialProblems }: { initialProblems: Probl
               {selected.size === problems.length ? "선택 해제" : "전체 선택"}
             </button>
           )}
-          <Button onClick={exportPDF} disabled={problems.length === 0} className="flex items-center gap-2">
+          <Button onClick={() => void exportPDF()} disabled={problems.length === 0} className="flex items-center gap-2">
             <FileDown size={15} />
             PDF{selected.size > 0 ? ` (${selected.size})` : ""}
           </Button>

@@ -1,0 +1,2 @@
+ALTER TABLE "MathProblem" ADD COLUMN "imageData" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "MathProblem" ADD COLUMN "mimeType" TEXT NOT NULL DEFAULT 'image/jpeg';

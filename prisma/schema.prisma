@@ -101,7 +101,9 @@ model MathProblem {
   title     String   @default("")
   source    String   @default("")  // 출처 (예: 2025학년도 수능 수학 29번)
   unit      String   @default("")
-  aiNote    String   @default("")  // AI 분석 텍스트 (편집 가능)
+  imageData String   @default("")  // 문제 이미지 base64
+  mimeType  String   @default("image/jpeg")
+  aiNote    String   @default("")  // AI 분석 (별도 보관, PDF엔 미포함)
   memo      String   @default("")  // 내 생각/메모
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
