@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   Sparkles,
   ClipboardList,
+  CalendarDays,
+  Timer,
 } from "lucide-react";
 
 const navItems = [
@@ -20,6 +22,8 @@ const navItems = [
   { href: "/weakness", label: "취약점 분석", icon: AlertTriangle },
   { href: "/math-helper", label: "AI 수학 도우미", icon: Sparkles },
   { href: "/math-problems", label: "수학 오답 정리", icon: ClipboardList },
+  { href: "/planner", label: "AI 플래너", icon: CalendarDays },
+  { href: "/planner/timetable", label: "오늘 시간표", icon: Timer },
 ];
 
 export function Sidebar() {

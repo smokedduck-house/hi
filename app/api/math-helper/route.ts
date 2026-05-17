@@ -1,40 +1,29 @@
 import { NextRequest } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
-export type Mode = "stuck" | "review" | "concept" | "optimize";
-
 const MODEL = "gemini-3.1-flash-lite";
 
-const MAX_TOKENS: Record<Mode, number> = {
-  stuck: 1200,
-  review: 800,
-  concept: 900,
-  optimize: 1000,
-};
+// ── 통합 분석 프롬프트 ────────────────────────────────────────
+const SYSTEM_PROMPT = `수능 수학 AI 튜터. 한국어. 수식은 LaTeX($...$). 불명확한 글씨는 추측 말고 확인 요청.
 
-const TEMPERATURE: Record<Mode, number> = {
-  stuck: 0.5,
-  review: 0.3,
-  concept: 0.4,
-  optimize: 0.3,
-};
+이미지를 분석해서 아래 순서대로 답해. 섹션 헤더([풀이] 등)는 반드시 그대로 포함.
 
-// ── 시스템 프롬프트 ───────────────────────────────────────────
-const BASE = `수능 수학 튜터. 한국어. 수식은 LaTeX($...$). 불명확한 글씨는 추측 말고 확인 요청.`;
+이미지에 문제 텍스트가 있으면 아래 블록으로 먼저 추출 (풀이만 있고 문제가 없으면 생략):
+---PROBLEM_TEXT_START---
+[문제 전문, LaTeX 수식 변환 포함]
+---PROBLEM_TEXT_END---
 
-const MODE_PROMPT: Record<Mode, string> = {
-  stuck: `${BASE}
-막힌 지점 파악 후 풀이 이어서 작성. 각 단계: 이유 1줄 + 수식. 최종 답 명시. 주의할 함정 1가지.`,
+[풀이]
+막힌 부분 파악 후 단계별 완전한 풀이 작성. 각 단계 이유 1줄 + 수식. 최종 답 명시.
 
-  review: `${BASE}
-풀이 단계별 검증. 오류: 몇 번째 줄, 무엇이 틀렸는지, 수정식. 맞으면 "정확합니다" 한 줄로 끝.`,
+[검토]
+풀이 각 단계 논리 검증. 오류: 위치 + 무엇이 틀렸는지 + 수정식. 오류 없으면 "정확합니다." 한 줄로 끝.
 
-  concept: `${BASE}
-사용 개념·공식 설명. 공식과 사용 조건, 수능 빈출 변형 패턴 2가지. 예시 수식 포함.`,
+[개념]
+사용된 핵심 개념·공식과 적용 조건. 수능 빈출 변형 패턴 1가지.
 
-  optimize: `${BASE}
-더 빠른 풀이 제안. 형식: [현재 접근 1줄] → [비효율 지점] → [최적화 풀이(수식)] → [시간 단축 요약]. 이미 최적이면 솔직히 말할 것.`,
-};
+[최적화]
+더 빠른 풀이가 있으면 구체적으로 제시. 없으면 "현재 풀이가 최적입니다." 한 줄로 끝.`;
 
 // ── IP 기반 일일 호출 제한 ────────────────────────────────────
 const RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED !== "false";
@@ -62,21 +51,19 @@ export async function POST(req: NextRequest) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip") ?? "unknown";
   if (!checkRateLimit(ip)) return new Response("일일 호출 한도를 초과했습니다.", { status: 429 });
 
-  let body: { mode: Mode; imageBase64: string; mimeType: string; hint?: string };
+  let body: { imageBase64: string; mimeType: string; hint?: string };
   try { body = await req.json(); }
   catch { return new Response("요청 형식이 올바르지 않습니다.", { status: 400 }); }
 
-  const { mode, imageBase64, mimeType, hint } = body;
+  const { imageBase64, mimeType, hint } = body;
 
-  if (!["stuck", "review", "concept", "optimize"].includes(mode))
-    return new Response("유효하지 않은 모드입니다.", { status: 400 });
   if (!ALLOWED_MIME.has(mimeType))
     return new Response("jpeg, png, webp만 허용됩니다.", { status: 400 });
   if (Buffer.from(imageBase64, "base64").byteLength > MAX_IMAGE_BYTES)
     return new Response("이미지 최대 10MB.", { status: 400 });
 
   const ai = new GoogleGenAI({ apiKey });
-  const userText = hint ? `[메모] ${hint}\n풀이 분석해줘.` : "풀이 분석해줘.";
+  const userText = hint ? `[참고] ${hint}\n분석해줘.` : "분석해줘.";
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -85,9 +72,9 @@ export async function POST(req: NextRequest) {
         const response = await ai.models.generateContentStream({
           model: MODEL,
           config: {
-            systemInstruction: MODE_PROMPT[mode],
-            maxOutputTokens: MAX_TOKENS[mode],
-            temperature: TEMPERATURE[mode],
+            systemInstruction: SYSTEM_PROMPT,
+            maxOutputTokens: 2500,
+            temperature: 0.3,
           },
           contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: imageBase64 } }, { text: userText }] }],
         });

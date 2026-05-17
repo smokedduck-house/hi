@@ -1,0 +1,1 @@
+ALTER TABLE "MathProblem" ADD COLUMN "problem" TEXT NOT NULL DEFAULT '';

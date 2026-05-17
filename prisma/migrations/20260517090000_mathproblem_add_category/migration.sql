@@ -1,0 +1,1 @@
+ALTER TABLE "MathProblem" ADD COLUMN "category" TEXT NOT NULL DEFAULT '오답';

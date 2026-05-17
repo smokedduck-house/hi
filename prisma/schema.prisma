@@ -101,12 +101,63 @@ model MathProblem {
   title     String   @default("")
   source    String   @default("")  // 출처 (예: 2025학년도 수능 수학 29번)
   unit      String   @default("")
-  imageData String   @default("")  // 문제 이미지 base64
+  problem   String   @default("")  // 추출된 문제 텍스트 (LaTeX, PDF용)
+  imageData String   @default("")  // 기존 이미지 (하위호환)
   mimeType  String   @default("image/jpeg")
   aiNote    String   @default("")  // AI 분석 (별도 보관, PDF엔 미포함)
   memo      String   @default("")  // 내 생각/메모
+  category  String   @default("오답")  // "오답" | "최적화"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// AI 학습 플랜
+model StudyPlan {
+  id        String   @id @default(cuid())
+  title     String
+  startDate String   // "2026-05-17"
+  endDate   String   // "2026-11-13"
+  tasks     String   // JSON: [{ name, totalCount, unit }]
+  schedule  String   @default("") // JSON: { "2026-05-17": { "수학 인강": 5 }, ... }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs        StudyLog[]
+  completions TaskCompletion[]
+
+  @@index([startDate])
+}
+
+// 타이머 공부 기록
+model StudyLog {
+  id        String   @id @default(cuid())
+  planId    String?
+  date      String   // "2026-05-17"
+  subject   String
+  seconds   Int
+  startTime String?  // "HH:MM"
+  endTime   String?  // "HH:MM"
+  createdAt DateTime @default(now())
+
+  plan StudyPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  @@index([planId])
+  @@index([date])
+}
+
+// 일별 과제 완료 수
+model TaskCompletion {
+  id      String @id @default(cuid())
+  planId  String
+  date    String
+  subject String
+  done    Int    @default(0)
+
+  plan StudyPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, date, subject])
+  @@index([planId])
+  @@index([date])
 }
 
 // 단원 마스터 (과목별 단원 목록)

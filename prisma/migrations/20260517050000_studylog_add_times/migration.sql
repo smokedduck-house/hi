@@ -1,0 +1,2 @@
+ALTER TABLE "StudyLog" ADD COLUMN "startTime" TEXT;
+ALTER TABLE "StudyLog" ADD COLUMN "endTime" TEXT;
