@@ -53,24 +53,34 @@ export function MathProblemsClient({ initialProblems }: { initialProblems: Probl
     setEditing(null);
   }
 
-  // 프린트 기반 PDF (한글 완벽 지원)
+  // 프린트 기반 PDF — 좌우 2열, 가운데 세로줄
   function exportPDF() {
     const targets = problems.filter((p) => selected.size === 0 || selected.has(p.id));
     if (targets.length === 0) return;
 
-    const rows = targets.map((p, i) => `
-      <div class="problem">
-        <div class="problem-header">
-          <span class="num">${i + 1}</span>
-          <span class="source">${p.source || "출처 미입력"}</span>
-          ${p.unit ? `<span class="unit">${p.unit}</span>` : ""}
-          ${p.title ? `<span class="title-badge">${p.title}</span>` : ""}
+    // 2개씩 묶어서 페이지 구성
+    const pages: typeof targets[] = [];
+    for (let i = 0; i < targets.length; i += 2) pages.push(targets.slice(i, i + 2));
+
+    function problemCell(p: Problem, idx: number) {
+      return `
+        <div class="cell">
+          <div class="problem-num">${idx + 1}</div>
+          <div class="source">${p.source || "출처 미입력"}</div>
+          ${p.unit ? `<div class="unit">${p.unit}${p.title ? " · " + p.title : ""}</div>` : (p.title ? `<div class="unit">${p.title}</div>` : "")}
+          <div class="content">${(p.aiNote || "").replace(/\n/g, "<br>")}</div>
+          ${p.memo ? `<div class="memo">${p.memo.replace(/\n/g, "<br>")}</div>` : ""}
+        </div>`;
+    }
+
+    const pageHtml = pages.map((pair, pi) => `
+      <div class="page${pi > 0 ? " break" : ""}">
+        <div class="row">
+          ${problemCell(pair[0], pi * 2)}
+          <div class="divider"></div>
+          ${pair[1] ? problemCell(pair[1], pi * 2 + 1) : '<div class="cell"></div>'}
         </div>
-        ${p.aiNote ? `<div class="ai-note"><div class="section-label">AI 분석</div><div class="ai-text">${p.aiNote.replace(/\n/g, "<br>")}</div></div>` : ""}
-        ${p.memo ? `<div class="memo"><div class="section-label">내 생각</div><div class="memo-text">${p.memo.replace(/\n/g, "<br>")}</div></div>` : ""}
-      </div>
-      ${(i % 2 === 1 && i < targets.length - 1) ? '<div class="page-break"></div>' : ""}
-    `).join('<div class="divider"></div>');
+      </div>`).join("");
 
     const html = `<!DOCTYPE html>
 <html lang="ko">
@@ -78,31 +88,80 @@ export function MathProblemsClient({ initialProblems }: { initialProblems: Probl
   <meta charset="UTF-8">
   <title>수학 오답 정리</title>
   <style>
-    @page { size: A4; margin: 15mm; }
-    * { box-sizing: border-box; }
-    body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Nanum Gothic', sans-serif; font-size: 11pt; color: #222; margin: 0; }
-    .problem { padding: 6mm 0; min-height: 128mm; }
-    .problem-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4mm; flex-wrap: wrap; }
-    .num { background: #222; color: #fff; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 9pt; font-weight: bold; flex-shrink: 0; }
-    .source { font-weight: bold; font-size: 12pt; }
-    .unit { background: #f0f0f0; color: #555; font-size: 9pt; padding: 2px 8px; border-radius: 20px; }
-    .title-badge { background: #e8f0fe; color: #1a56db; font-size: 9pt; padding: 2px 8px; border-radius: 20px; }
-    .section-label { font-size: 8pt; font-weight: 700; color: #888; letter-spacing: 0.05em; margin-bottom: 2mm; }
-    .ai-note { background: #f8f9fa; border-left: 3px solid #4f46e5; padding: 3mm 4mm; border-radius: 0 4px 4px 0; margin-bottom: 3mm; }
-    .ai-text { font-size: 10pt; line-height: 1.7; white-space: pre-wrap; }
-    .memo { background: #fffbeb; border-left: 3px solid #f59e0b; padding: 3mm 4mm; border-radius: 0 4px 4px 0; }
-    .memo-text { font-size: 10pt; line-height: 1.6; }
-    .divider { border: none; border-top: 1px dashed #ccc; margin: 0; }
-    .page-break { page-break-after: always; }
-    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+    @page { size: A4 portrait; margin: 12mm 10mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Nanum Gothic', sans-serif; color: #111; font-size: 10pt; }
+
+    .page { width: 100%; height: 100%; }
+    .break { page-break-before: always; }
+
+    .row {
+      display: flex;
+      width: 100%;
+      height: 267mm; /* A4 height - margins */
+      gap: 0;
+    }
+
+    .cell {
+      flex: 1;
+      padding: 4mm 6mm;
+      overflow: hidden;
+    }
+
+    .divider {
+      width: 0;
+      border-left: 1px solid #888;
+      flex-shrink: 0;
+      align-self: stretch;
+    }
+
+    .problem-num {
+      font-size: 9pt;
+      font-weight: 700;
+      color: #999;
+      margin-bottom: 1mm;
+    }
+
+    .source {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #111;
+      margin-bottom: 1.5mm;
+      padding-bottom: 1.5mm;
+      border-bottom: 1.5px solid #222;
+    }
+
+    .unit {
+      font-size: 8.5pt;
+      color: #555;
+      margin-bottom: 3mm;
+    }
+
+    .content {
+      font-size: 10pt;
+      line-height: 1.75;
+      color: #222;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .memo {
+      margin-top: 4mm;
+      padding: 2mm 3mm;
+      background: #fffbeb;
+      border-left: 2px solid #f59e0b;
+      font-size: 9pt;
+      color: #555;
+      line-height: 1.5;
+    }
+
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
   </style>
 </head>
 <body>
-  <div style="text-align:center; margin-bottom: 6mm; border-bottom: 2px solid #222; padding-bottom: 3mm;">
-    <strong style="font-size: 14pt;">수학 오답 정리</strong>
-    <span style="font-size: 9pt; color: #888; margin-left: 8px;">${new Date().toLocaleDateString("ko-KR")} · ${targets.length}문제</span>
-  </div>
-  ${rows}
+  ${pageHtml}
   <script>window.onload = function(){ window.print(); }<\/script>
 </body>
 </html>`;
