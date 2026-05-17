@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/planner-update",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/planner-update",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/planner-update",
+      "schedule": "50 14 * * *"
+    }
+  ]
+}

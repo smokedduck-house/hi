@@ -452,59 +452,121 @@ function AnalysisTab() {
 }
 
 // ── 모의고사 분석 탭 ──────────────────────────────────────────
+type ExamResult = {
+  problemNum: string;
+  isWrong: boolean;
+  wrongReason: string;
+  problemText: string;
+  solution: string;
+  concept: string;
+  isOptimizable: boolean;
+  optimizeTip: string;
+};
+
 type ProblemEntry = {
   id: string;
-  num: string;
-  category: "틀림" | "최적화확인";
   image: { base64: string; mimeType: string } | null;
   status: "idle" | "analyzing" | "done" | "error";
-  result?: {
-    problemText: string;
-    solution: string;
-    concept: string;
-    isOptimizable: boolean;
-    optimizeTip: string;
-  };
-  savedId?: string;
+  result?: ExamResult;
+  savedOdapId?: string;
+  savedOptId?: string;
   errorMsg?: string;
-  expanded?: boolean;
+  expanded: boolean;
 };
 
 function ExamTab() {
   const [examSource, setExamSource] = useState("");
   const [problems, setProblems] = useState<ProblemEntry[]>([
-    { id: crypto.randomUUID(), num: "", category: "틀림", image: null, status: "idle", expanded: true },
+    { id: crypto.randomUUID(), image: null, status: "idle", expanded: true },
   ]);
   const [analyzing, setAnalyzing] = useState(false);
-  const [optimizeCandidates, setOptimizeCandidates] = useState<ProblemEntry[]>([]);
 
   function addProblem() {
-    setProblems((p) => [...p, { id: crypto.randomUUID(), num: "", category: "틀림", image: null, status: "idle", expanded: true }]);
+    setProblems((p) => [...p, { id: crypto.randomUUID(), image: null, status: "idle", expanded: true }]);
+  }
+
+  // 여러 파일을 한번에 드롭/선택 → 자동으로 문제 슬롯 추가
+  function handleMultiFiles(files: File[]) {
+    const valid = files.filter((f) => ["image/jpeg", "image/png", "image/webp"].includes(f.type));
+    if (valid.length === 0) return;
+
+    setProblems((prev) => {
+      // 빈 슬롯이 있으면 먼저 채우고, 모자라면 새로 추가
+      const next = [...prev];
+      let fileIdx = 0;
+      for (let i = 0; i < next.length && fileIdx < valid.length; i++) {
+        if (!next[i].image) {
+          // 비동기 resizeImage를 여기서 호출할 수 없으니 placeholder 표시 후 useEffect에서 처리
+          next[i] = { ...next[i], status: "idle" };
+          fileIdx++;
+        }
+      }
+      // 남은 파일들은 새 슬롯
+      while (fileIdx < valid.length) {
+        next.push({ id: crypto.randomUUID(), image: null, status: "idle", expanded: true });
+        fileIdx++;
+      }
+      return next;
+    });
+
+    // 실제 리사이즈는 순서대로 처리
+    (async () => {
+      setProblems((prev) => {
+        const emptySlots = prev.filter((p) => !p.image);
+        const toFill = Math.min(emptySlots.length, valid.length);
+        // mark로 구분하기 위해 id 배열 추출
+        return prev;
+      });
+
+      // 간단하게: 현재 빈 슬롯 id 목록 가져와서 파일 매칭
+      setProblems((prev) => {
+        const result = [...prev];
+        const emptyIds = result.filter((p) => !p.image).map((p) => p.id);
+        const promises: Promise<void>[] = [];
+        valid.forEach((file, i) => {
+          const targetId = emptyIds[i];
+          if (!targetId) return;
+          const p = resizeImage(file).then((img) => {
+            setProblems((cur) => cur.map((x) => x.id === targetId ? { ...x, image: img } : x));
+          });
+          promises.push(p);
+        });
+        return result;
+      });
+
+      // 위 방식으로는 setProblems 내부에서 async가 어려우니 직접 처리
+      const emptyIds: string[] = [];
+      setProblems((prev) => {
+        prev.filter((p) => !p.image).forEach((p) => emptyIds.push(p.id));
+        return prev;
+      });
+      for (let i = 0; i < valid.length && i < emptyIds.length; i++) {
+        const img = await resizeImage(valid[i]);
+        const id = emptyIds[i];
+        setProblems((prev) => prev.map((x) => x.id === id ? { ...x, image: img } : x));
+      }
+    })();
+  }
+
+  async function handleFileForProblem(id: string, file: File) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) return;
+    const image = await resizeImage(file);
+    setProblems((p) => p.map((x) => x.id === id ? { ...x, image } : x));
   }
 
   function removeProblem(id: string) {
     setProblems((p) => p.filter((x) => x.id !== id));
   }
 
-  function updateProblem(id: string, patch: Partial<ProblemEntry>) {
-    setProblems((p) => p.map((x) => x.id === id ? { ...x, ...patch } : x));
-  }
-
-  async function handleFileForProblem(id: string, file: File) {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) return;
-    const image = await resizeImage(file);
-    updateProblem(id, { image });
-  }
-
   async function analyzeAll() {
-    const toAnalyze = problems.filter((p) => p.image);
+    const toAnalyze = problems.filter((p) => p.image && p.status !== "done");
     if (toAnalyze.length === 0) return;
 
     setAnalyzing(true);
-    const newCandidates: ProblemEntry[] = [];
+    const doneCount = { current: 0 };
 
     for (const prob of toAnalyze) {
-      updateProblem(prob.id, { status: "analyzing" });
+      setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, status: "analyzing" } : x));
 
       try {
         const res = await fetch("/api/exam-analyzer", {
@@ -514,208 +576,254 @@ function ExamTab() {
         });
 
         if (!res.ok) {
-          updateProblem(prob.id, { status: "error", errorMsg: "분석 실패" });
+          setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, status: "error", errorMsg: "분석 실패" } : x));
           continue;
         }
 
-        const result = await res.json() as ProblemEntry["result"];
-        let savedId: string | undefined;
+        const result = await res.json() as ExamResult;
+        const numLabel = result.problemNum || "";
+        const sourceLabel = [examSource || "모의고사", numLabel ? `${numLabel}번` : ""].filter(Boolean).join(" ");
+        let savedOdapId: string | undefined;
+        let savedOptId: string | undefined;
 
-        // 틀린 문제는 오답정리에 자동 저장
-        if (prob.category === "틀림") {
-          const label = prob.num ? `${examSource || "모의고사"} ${prob.num}번` : (examSource || "모의고사");
+        // AI가 틀렸다고 판단 → 오답정리 자동 저장
+        if (result.isWrong) {
           const saveRes = await fetch("/api/math-problems", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              source: label,
-              problem: result!.problemText,
-              aiNote: `[풀이]\n${result!.solution}\n\n[개념]\n${result!.concept}`,
+              source: sourceLabel,
+              problem: result.problemText,
+              aiNote: `[틀린 이유]\n${result.wrongReason}\n\n[올바른 풀이]\n${result.solution}\n\n[개념]\n${result.concept}`,
               category: "오답",
             }),
           });
-          const saved = await saveRes.json();
-          savedId = saved.id;
+          savedOdapId = (await saveRes.json()).id;
         }
 
-        // 최적화 가능한 문제 수집
-        if (result!.isOptimizable) {
-          newCandidates.push({ ...prob, result, savedId });
+        // AI가 최적화 가능하다고 판단 → 최적화 후보 저장
+        if (result.isOptimizable) {
+          const saveRes = await fetch("/api/math-problems", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              source: sourceLabel,
+              problem: result.problemText,
+              aiNote: `[최적화 팁]\n${result.optimizeTip}\n\n[개념]\n${result.concept}`,
+              category: "최적화",
+            }),
+          });
+          savedOptId = (await saveRes.json()).id;
         }
 
-        updateProblem(prob.id, { status: "done", result, savedId, expanded: false });
+        doneCount.current++;
+        setProblems((p) => p.map((x) =>
+          x.id === prob.id ? { ...x, status: "done", result, savedOdapId, savedOptId, expanded: true } : x
+        ));
       } catch {
-        updateProblem(prob.id, { status: "error", errorMsg: "네트워크 오류" });
+        setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, status: "error", errorMsg: "네트워크 오류" } : x));
       }
     }
 
-    // 최적화 후보가 있으면 DB에도 저장
-    for (const cand of newCandidates) {
-      const label = cand.num ? `${examSource || "모의고사"} ${cand.num}번` : (examSource || "모의고사");
-      await fetch("/api/math-problems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: label,
-          problem: cand.result!.problemText,
-          aiNote: `[최적화 팁]\n${cand.result!.optimizeTip}\n\n[개념]\n${cand.result!.concept}`,
-          category: "최적화",
-        }),
-      });
-    }
-
-    setOptimizeCandidates((prev) => [...prev, ...newCandidates]);
     setAnalyzing(false);
   }
 
-  const doneCount = problems.filter((p) => p.status === "done").length;
-  const savedCount = problems.filter((p) => p.savedId).length;
+  const doneProblems = problems.filter((p) => p.status === "done");
+  const wrongCount = doneProblems.filter((p) => p.result?.isWrong).length;
+  const optCount = doneProblems.filter((p) => p.result?.isOptimizable).length;
+  const hasImages = problems.some((p) => p.image);
   const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
+  const totalToAnalyze = problems.filter((p) => p.image && p.status !== "done").length;
+  const currentDone = problems.filter((p) => p.status === "done").length;
 
   return (
     <div className="space-y-5">
       {/* 시험명 */}
       <div className="space-y-1">
-        <label className="text-xs font-semibold" style={{ color: "var(--muted-foreground)" }}>시험명</label>
+        <label className="text-xs font-semibold" style={{ color: "var(--muted-foreground)" }}>시험명 (선택)</label>
         <Input value={examSource} onChange={(e) => setExamSource(e.target.value)}
-          placeholder="예: 2026 수능 수학, 6월 모평 수학" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+          placeholder="예: 2026 수능 수학, 6월 모평" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
       </div>
 
-      {/* 문제 목록 */}
-      <div className="space-y-3">
-        {problems.map((prob) => (
-          <div key={prob.id} className="rounded-xl border" style={cardStyle}>
-            {/* 헤더 */}
-            <div className="flex items-center gap-2 p-3">
-              {/* 문제 번호 */}
-              <Input
-                value={prob.num}
-                onChange={(e) => updateProblem(prob.id, { num: e.target.value })}
-                placeholder="번호"
-                className="w-16 text-center"
-                style={{ background: "var(--muted)", borderColor: "var(--border)" }}
-              />
+      {/* 한번에 여러 장 업로드 드롭존 */}
+      <div
+        className="rounded-xl border-2 border-dashed p-6 text-center cursor-pointer"
+        style={{ borderColor: "var(--border)" }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); handleMultiFiles(Array.from(e.dataTransfer.files)); }}
+        onClick={() => {
+          const input = document.createElement("input");
+          input.type = "file"; input.accept = "image/*"; input.multiple = true;
+          input.onchange = (ev) => {
+            const files = Array.from((ev.target as HTMLInputElement).files ?? []);
+            handleMultiFiles(files);
+          };
+          input.click();
+        }}
+      >
+        <Upload size={20} className="mx-auto mb-2" style={{ color: "var(--primary)" }} />
+        <p className="text-sm font-medium">여러 장 한번에 드래그하거나 클릭</p>
+        <p className="text-xs mt-1" style={{ color: "var(--muted-foreground)" }}>
+          AI가 각 사진을 보고 정오(正誤)·최적화 여부를 스스로 판단합니다
+        </p>
+      </div>
 
-              {/* 카테고리 토글 */}
-              <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: "var(--border)" }}>
-                {(["틀림", "최적화확인"] as const).map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => updateProblem(prob.id, { category: cat })}
-                    className="px-3 py-1.5 text-xs font-medium transition-colors"
-                    style={{
-                      background: prob.category === cat ? (cat === "틀림" ? "#ef4444" : "#f59e0b") : "var(--muted)",
-                      color: prob.category === cat ? "#fff" : "var(--muted-foreground)",
-                    }}
-                  >
-                    {cat === "틀림" ? "✗ 틀림" : "⚡ 최적화확인"}
-                  </button>
-                ))}
-              </div>
-
-              {/* 상태 표시 */}
-              <div className="flex-1 flex items-center justify-end gap-2">
-                {prob.status === "analyzing" && <Loader2 size={14} className="animate-spin" style={{ color: "var(--primary)" }} />}
-                {prob.status === "done" && prob.category === "틀림" && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
-                    <Check size={10} className="inline mr-1" />오답저장
+      {/* 문제 카드 목록 */}
+      {problems.filter((p) => p.image).length > 0 && (
+        <div className="space-y-2">
+          {problems.map((prob, idx) => {
+            if (!prob.image && prob.status === "idle") return null;
+            const result = prob.result;
+            return (
+              <div key={prob.id} className="rounded-xl border" style={cardStyle}>
+                <div className="flex items-center gap-2 p-3">
+                  <span className="text-xs font-bold w-5 text-center" style={{ color: "var(--muted-foreground)" }}>
+                    {idx + 1}
+                    {result?.problemNum ? `(${result.problemNum}번)` : ""}
                   </span>
-                )}
-                {prob.status === "done" && prob.result?.isOptimizable && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(245,158,11,0.1)", color: "#f59e0b" }}>
-                    ⚡ 최적화가능
-                  </span>
-                )}
-                {prob.status === "error" && <span className="text-xs" style={{ color: "var(--destructive)" }}>오류</span>}
-                <button onClick={() => updateProblem(prob.id, { expanded: !prob.expanded })}
-                  className="p-1" style={{ color: "var(--muted-foreground)" }}>
-                  {prob.expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-                <button onClick={() => removeProblem(prob.id)} className="p-1" style={{ color: "var(--muted-foreground)" }}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
 
-            {/* 이미지 + 결과 */}
-            {prob.expanded && (
-              <div className="px-3 pb-3 space-y-3 border-t" style={{ borderColor: "var(--border)" }}>
-                <div className="pt-3">
-                  {prob.image ? (
-                    <div className="flex items-center gap-2">
-                      <img src={`data:${prob.image.mimeType};base64,${prob.image.base64}`} alt="문제"
-                        className="w-20 h-16 object-cover rounded" style={{ border: "1px solid var(--border)" }} />
-                      <button onClick={() => updateProblem(prob.id, { image: null })}
-                        className="text-xs px-2 py-1 rounded" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
-                        <X size={12} className="inline mr-1" />제거
-                      </button>
-                    </div>
-                  ) : (
-                    <ImageUploader onFile={(f) => handleFileForProblem(prob.id, f)} compact />
-                  )}
+                  {/* 상태 뱃지 */}
+                  <div className="flex gap-1.5 flex-1">
+                    {prob.status === "analyzing" && (
+                      <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
+                        <Loader2 size={10} className="animate-spin" /> 분석 중
+                      </span>
+                    )}
+                    {prob.status === "done" && result && (
+                      <>
+                        {result.isWrong ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
+                            ✗ 틀림 · 오답저장
+                          </span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
+                            ✓ 정답
+                          </span>
+                        )}
+                        {result.isOptimizable && (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(245,158,11,0.1)", color: "#f59e0b" }}>
+                            ⚡ 최적화저장
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {prob.status === "error" && (
+                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
+                        오류
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, expanded: !x.expanded } : x))}
+                      className="p-1" style={{ color: "var(--muted-foreground)" }}>
+                      {prob.expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
+                    <button onClick={() => removeProblem(prob.id)} className="p-1" style={{ color: "var(--muted-foreground)" }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
 
-                {/* 분석 결과 */}
-                {prob.status === "done" && prob.result && (
-                  <div className="space-y-2 text-sm">
-                    {prob.result.problemText && (
-                      <div className="rounded-lg p-3" style={{ background: "rgba(59,130,246,0.08)", borderLeft: "3px solid #3b82f6" }}>
-                        <p className="text-xs font-bold mb-1" style={{ color: "#3b82f6" }}>문제</p>
-                        <div className="text-xs"><MathRenderer text={prob.result.problemText} /></div>
+                {prob.expanded && (
+                  <div className="px-3 pb-3 border-t space-y-2 pt-3" style={{ borderColor: "var(--border)" }}>
+                    {/* 이미지 썸네일 */}
+                    {prob.image && (
+                      <div className="flex items-center gap-2">
+                        <img src={`data:${prob.image.mimeType};base64,${prob.image.base64}`} alt="문제"
+                          className="w-24 h-18 object-cover rounded" style={{ border: "1px solid var(--border)", maxHeight: 72 }} />
+                        {prob.status === "idle" && (
+                          <button onClick={() => setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, image: null } : x))}
+                            className="text-xs px-2 py-1 rounded" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
+                            <X size={10} className="inline mr-1" />제거
+                          </button>
+                        )}
                       </div>
                     )}
-                    <div className="rounded-lg p-3" style={{ background: "var(--muted)" }}>
-                      <p className="text-xs font-bold mb-1" style={{ color: "#10b981" }}>풀이</p>
-                      <div className="text-xs whitespace-pre-wrap"><MathRenderer text={prob.result.solution} /></div>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: "var(--muted)" }}>
-                      <p className="text-xs font-bold mb-1" style={{ color: "#8b5cf6" }}>개념</p>
-                      <div className="text-xs whitespace-pre-wrap"><MathRenderer text={prob.result.concept} /></div>
-                    </div>
-                    {prob.result.isOptimizable && prob.result.optimizeTip && (
-                      <div className="rounded-lg p-3" style={{ background: "rgba(245,158,11,0.08)", borderLeft: "3px solid #f59e0b" }}>
-                        <p className="text-xs font-bold mb-1" style={{ color: "#f59e0b" }}>⚡ 최적화</p>
-                        <div className="text-xs whitespace-pre-wrap"><MathRenderer text={prob.result.optimizeTip} /></div>
+
+                    {/* 분석 결과 */}
+                    {prob.status === "done" && result && (
+                      <div className="space-y-2 text-xs">
+                        {result.isWrong && result.wrongReason && (
+                          <div className="rounded-lg p-2.5" style={{ background: "rgba(239,68,68,0.07)", borderLeft: "3px solid #ef4444" }}>
+                            <p className="font-bold mb-1" style={{ color: "#ef4444" }}>틀린 이유</p>
+                            <p className="whitespace-pre-wrap">{result.wrongReason}</p>
+                          </div>
+                        )}
+                        {result.problemText && (
+                          <div className="rounded-lg p-2.5" style={{ background: "rgba(59,130,246,0.07)", borderLeft: "3px solid #3b82f6" }}>
+                            <p className="font-bold mb-1" style={{ color: "#3b82f6" }}>문제</p>
+                            <MathRenderer text={result.problemText} />
+                          </div>
+                        )}
+                        {result.isWrong && result.solution && (
+                          <div className="rounded-lg p-2.5" style={{ background: "var(--muted)" }}>
+                            <p className="font-bold mb-1" style={{ color: "#10b981" }}>올바른 풀이</p>
+                            <div className="whitespace-pre-wrap"><MathRenderer text={result.solution} /></div>
+                          </div>
+                        )}
+                        {result.concept && (
+                          <div className="rounded-lg p-2.5" style={{ background: "var(--muted)" }}>
+                            <p className="font-bold mb-1" style={{ color: "#8b5cf6" }}>개념</p>
+                            <p className="whitespace-pre-wrap">{result.concept}</p>
+                          </div>
+                        )}
+                        {result.isOptimizable && result.optimizeTip && (
+                          <div className="rounded-lg p-2.5" style={{ background: "rgba(245,158,11,0.07)", borderLeft: "3px solid #f59e0b" }}>
+                            <p className="font-bold mb-1" style={{ color: "#f59e0b" }}>⚡ 최적화</p>
+                            <div className="whitespace-pre-wrap"><MathRenderer text={result.optimizeTip} /></div>
+                          </div>
+                        )}
                       </div>
+                    )}
+                    {prob.status === "error" && (
+                      <p className="text-xs px-2 py-1.5 rounded" style={{ background: "rgba(239,68,68,0.1)", color: "var(--destructive)" }}>
+                        {prob.errorMsg}
+                      </p>
                     )}
                   </div>
                 )}
-                {prob.status === "error" && (
-                  <p className="text-xs px-3 py-2 rounded" style={{ background: "rgba(239,68,68,0.1)", color: "var(--destructive)" }}>
-                    {prob.errorMsg}
-                  </p>
-                )}
               </div>
-            )}
-          </div>
-        ))}
+            );
+          })}
 
-        <button onClick={addProblem}
-          className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border w-full justify-center"
-          style={{ borderColor: "var(--border)", borderStyle: "dashed", color: "var(--muted-foreground)" }}>
-          <Plus size={14} /> 문제 추가
-        </button>
-      </div>
+          <button onClick={addProblem}
+            className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border w-full justify-center"
+            style={{ borderColor: "var(--border)", borderStyle: "dashed", color: "var(--muted-foreground)" }}>
+            <Plus size={14} /> 문제 추가
+          </button>
+        </div>
+      )}
 
       {/* 분석 버튼 */}
-      <Button onClick={analyzeAll} disabled={analyzing || problems.every((p) => !p.image)} className="w-full">
-        {analyzing
-          ? <><Loader2 size={16} className="mr-2 animate-spin" />분석 중... ({doneCount}/{problems.filter((p) => p.image).length})</>
-          : <>AI 분석 시작 · 틀린 문제 자동 저장</>
-        }
-      </Button>
+      {hasImages && (
+        <Button onClick={analyzeAll} disabled={analyzing || totalToAnalyze === 0} className="w-full">
+          {analyzing
+            ? <><Loader2 size={16} className="mr-2 animate-spin" />AI 분석 중... ({currentDone}/{currentDone + totalToAnalyze})</>
+            : <>AI 자동 분류 시작 · {totalToAnalyze}장</>
+          }
+        </Button>
+      )}
 
       {/* 완료 요약 */}
-      {doneCount > 0 && !analyzing && (
+      {doneProblems.length > 0 && !analyzing && (
         <div className="rounded-xl border p-4 space-y-2" style={cardStyle}>
-          <p className="text-sm font-semibold">분석 완료</p>
-          <div className="flex gap-4 text-sm">
-            <span style={{ color: "#ef4444" }}>✗ 오답 저장 {savedCount}개</span>
-            <span style={{ color: "#f59e0b" }}>⚡ 최적화 후보 {optimizeCandidates.length}개</span>
+          <p className="text-sm font-semibold">분석 결과</p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg p-2" style={{ background: "var(--muted)" }}>
+              <p className="text-lg font-bold">{doneProblems.length}</p>
+              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>분석 완료</p>
+            </div>
+            <div className="rounded-lg p-2" style={{ background: "rgba(239,68,68,0.07)" }}>
+              <p className="text-lg font-bold" style={{ color: "#ef4444" }}>{wrongCount}</p>
+              <p className="text-xs" style={{ color: "#ef4444" }}>오답 저장</p>
+            </div>
+            <div className="rounded-lg p-2" style={{ background: "rgba(245,158,11,0.07)" }}>
+              <p className="text-lg font-bold" style={{ color: "#f59e0b" }}>{optCount}</p>
+              <p className="text-xs" style={{ color: "#f59e0b" }}>최적화 저장</p>
+            </div>
           </div>
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-            오답정리 페이지에서 확인하세요.
-          </p>
+          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>오답정리 페이지에서 확인하세요.</p>
         </div>
       )}
     </div>

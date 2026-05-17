@@ -112,7 +112,7 @@ function buildSchedule(
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const apiKey = process.env.PLANNER_GOOGLE_API_KEY ?? process.env.GOOGLE_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "GOOGLE_API_KEY 없음" }, { status: 500 });
 
   const { title, startDate, endDate, taskInfo, dailyCapacity, description } = await req.json() as {
