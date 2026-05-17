@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 
 export type Mode = "stuck" | "review" | "concept" | "optimize";
 
-const MODEL = "gemini-1.5-flash-8b";
+const MODEL = "gemini-3.1-flash-lite";
 
 const MAX_TOKENS: Record<Mode, number> = {
   stuck: 1200,
