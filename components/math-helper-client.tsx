@@ -4,8 +4,9 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import Cropper from "react-easy-crop";
 import type { Area } from "react-easy-crop";
 import { InlineMath, BlockMath } from "react-katex";
-import { Upload, Camera, Crop, X, RotateCcw, Zap, Send } from "lucide-react";
+import { Upload, Camera, Crop, X, RotateCcw, Zap, Send, BookmarkPlus, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { Mode } from "@/app/api/math-helper/route";
 
@@ -190,6 +191,56 @@ function OptimizeResponse({ text }: { text: string }) {
   );
 }
 
+// ── 저장 다이얼로그 ────────────────────────────────────────────
+function SaveDialog({ onSave, onCancel, aiNote }: {
+  onSave: (title: string, unit: string, memo: string, aiNote: string) => Promise<void>;
+  onCancel: () => void;
+  aiNote: string;
+}) {
+  const [title, setTitle] = useState("");
+  const [unit, setUnit] = useState("");
+  const [memo, setMemo] = useState("");
+  const [includeAi, setIncludeAi] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }}>
+      <div className="rounded-2xl border p-6 space-y-4 w-full max-w-md mx-4" style={{ background: "var(--card)", borderColor: "var(--border)" }}>
+        <h3 className="font-bold text-lg">문제 저장</h3>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>제목 (선택)</label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 수열 극한 29번" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>단원 (선택)</label>
+            <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="예: 미적분 - 극한" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>메모 (선택)</label>
+            <Textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="틀린 이유, 주의사항 등" rows={3} style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+          </div>
+          {aiNote && (
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={includeAi} onChange={(e) => setIncludeAi(e.target.checked)} />
+              AI 분석 내용 함께 저장
+            </label>
+          )}
+        </div>
+        <div className="flex gap-2 justify-end">
+          <Button variant="outline" onClick={onCancel}>취소</Button>
+          <Button disabled={saving} onClick={async () => {
+            setSaving(true);
+            await onSave(title, unit, memo, includeAi ? aiNote : "");
+          }}>
+            {saving ? "저장 중..." : "저장"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── 메인 컴포넌트 ──────────────────────────────────────────────
 export function MathHelperClient() {
   const [mode, setMode] = useState<Mode>("stuck");
@@ -199,6 +250,8 @@ export function MathHelperClient() {
   const [response, setResponse] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   // 크롭 상태
   const [cropping, setCropping] = useState(false);
@@ -300,10 +353,30 @@ export function MathHelperClient() {
     }
   }, [finalImage, mode, hint, streaming]);
 
+  // 문제 저장
+  const handleSave = useCallback(async (title: string, unit: string, memo: string, aiNote: string) => {
+    if (!finalImage) return;
+    const res = await fetch("/api/math-problems", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, imageData: finalImage.base64, mimeType: finalImage.mimeType, unit, memo, aiNote }),
+    });
+    const data = await res.json();
+    setSavedId(data.id);
+    setShowSaveDialog(false);
+  }, [finalImage]);
+
   const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
 
   return (
     <div className="space-y-5 max-w-3xl">
+      {showSaveDialog && (
+        <SaveDialog
+          aiNote={response}
+          onSave={handleSave}
+          onCancel={() => setShowSaveDialog(false)}
+        />
+      )}
       <div>
         <h2 className="text-2xl font-bold flex items-center gap-2">
           <span>AI 수학 도우미</span>
@@ -499,13 +572,28 @@ export function MathHelperClient() {
               {streaming && <span className="ml-2 animate-pulse">●</span>}
             </p>
             {response && !streaming && (
-              <button
-                onClick={() => { setResponse(""); }}
-                className="text-xs flex items-center gap-1 px-2 py-1 rounded"
-                style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}
-              >
-                <RotateCcw size={12} /> 다른 풀이 보여줘
-              </button>
+              <div className="flex items-center gap-2">
+                {savedId ? (
+                  <span className="text-xs flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
+                    <Check size={12} /> 저장됨
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => setShowSaveDialog(true)}
+                    className="text-xs flex items-center gap-1 px-2 py-1 rounded"
+                    style={{ background: "var(--primary)", color: "var(--primary-foreground)" }}
+                  >
+                    <BookmarkPlus size={12} /> 문제 저장
+                  </button>
+                )}
+                <button
+                  onClick={() => { setResponse(""); setSavedId(null); }}
+                  className="text-xs flex items-center gap-1 px-2 py-1 rounded"
+                  style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}
+                >
+                  <RotateCcw size={12} /> 다시
+                </button>
+              </div>
             )}
           </div>
 

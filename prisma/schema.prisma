@@ -95,6 +95,19 @@ model AnswerKey {
   @@index([examId])
 }
 
+// 수학 오답 문제 저장
+model MathProblem {
+  id        String   @id @default(cuid())
+  title     String   @default("")
+  imageData String   // base64
+  mimeType  String   @default("image/jpeg")
+  unit      String   @default("")
+  memo      String   @default("")
+  aiNote    String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // 단원 마스터 (과목별 단원 목록)
 model Unit {
   id          String  @id @default(cuid())
