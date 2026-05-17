@@ -193,48 +193,55 @@ function OptimizeResponse({ text }: { text: string }) {
 
 // ── 저장 다이얼로그 ────────────────────────────────────────────
 function SaveDialog({ onSave, onCancel, aiNote }: {
-  onSave: (title: string, unit: string, memo: string, aiNote: string) => Promise<void>;
+  onSave: (title: string, source: string, unit: string, aiNote: string, memo: string) => Promise<void>;
   onCancel: () => void;
   aiNote: string;
 }) {
   const [title, setTitle] = useState("");
+  const [source, setSource] = useState("");
   const [unit, setUnit] = useState("");
+  const [editedAi, setEditedAi] = useState(aiNote);
   const [memo, setMemo] = useState("");
-  const [includeAi, setIncludeAi] = useState(true);
   const [saving, setSaving] = useState(false);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }}>
-      <div className="rounded-2xl border p-6 space-y-4 w-full max-w-md mx-4" style={{ background: "var(--card)", borderColor: "var(--border)" }}>
-        <h3 className="font-bold text-lg">문제 저장</h3>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>제목 (선택)</label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 수열 극한 29번" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="rounded-2xl border w-full max-w-lg max-h-[90vh] overflow-y-auto" style={{ background: "var(--card)", borderColor: "var(--border)" }}>
+        <div className="p-6 space-y-4">
+          <h3 className="font-bold text-lg">오답 저장</h3>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>출처</label>
+              <Input value={source} onChange={(e) => setSource(e.target.value)} placeholder="예: 2025학년도 수능 수학 29번" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>제목 (선택)</label>
+                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 점화식 29번" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>단원 (선택)</label>
+                <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="예: 수열" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>AI 분석 (편집 가능)</label>
+              <Textarea value={editedAi} onChange={(e) => setEditedAi(e.target.value)} rows={6} style={{ background: "var(--muted)", borderColor: "var(--border)", fontSize: "0.8rem" }} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>내 생각 / 메모</label>
+              <Textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="틀린 이유, 다음엔 주의할 점 등" rows={3} style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+            </div>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>단원 (선택)</label>
-            <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="예: 미적분 - 극한" style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={onCancel}>취소</Button>
+            <Button disabled={saving} onClick={async () => {
+              setSaving(true);
+              await onSave(title, source, unit, editedAi, memo);
+            }}>
+              {saving ? "저장 중..." : "저장"}
+            </Button>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium" style={{ color: "var(--muted-foreground)" }}>메모 (선택)</label>
-            <Textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="틀린 이유, 주의사항 등" rows={3} style={{ background: "var(--muted)", borderColor: "var(--border)" }} />
-          </div>
-          {aiNote && (
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={includeAi} onChange={(e) => setIncludeAi(e.target.checked)} />
-              AI 분석 내용 함께 저장
-            </label>
-          )}
-        </div>
-        <div className="flex gap-2 justify-end">
-          <Button variant="outline" onClick={onCancel}>취소</Button>
-          <Button disabled={saving} onClick={async () => {
-            setSaving(true);
-            await onSave(title, unit, memo, includeAi ? aiNote : "");
-          }}>
-            {saving ? "저장 중..." : "저장"}
-          </Button>
         </div>
       </div>
     </div>
@@ -354,17 +361,16 @@ export function MathHelperClient() {
   }, [finalImage, mode, hint, streaming]);
 
   // 문제 저장
-  const handleSave = useCallback(async (title: string, unit: string, memo: string, aiNote: string) => {
-    if (!finalImage) return;
+  const handleSave = useCallback(async (title: string, source: string, unit: string, aiNote: string, memo: string) => {
     const res = await fetch("/api/math-problems", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, imageData: finalImage.base64, mimeType: finalImage.mimeType, unit, memo, aiNote }),
+      body: JSON.stringify({ title, source, unit, aiNote, memo }),
     });
     const data = await res.json();
     setSavedId(data.id);
     setShowSaveDialog(false);
-  }, [finalImage]);
+  }, []);
 
   const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
 

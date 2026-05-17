@@ -10,10 +10,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { title, unit, memo, aiNote } = await req.json();
+  const { title, source, unit, aiNote, memo } = await req.json();
   const problem = await prisma.mathProblem.update({
     where: { id },
-    data: { title: title ?? "", unit: unit ?? "", memo: memo ?? "", aiNote: aiNote ?? "" },
+    data: { title: title ?? "", source: source ?? "", unit: unit ?? "", aiNote: aiNote ?? "", memo: memo ?? "" },
   });
   return NextResponse.json(problem);
 }

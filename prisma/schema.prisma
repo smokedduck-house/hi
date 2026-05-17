@@ -99,11 +99,10 @@ model AnswerKey {
 model MathProblem {
   id        String   @id @default(cuid())
   title     String   @default("")
-  imageData String   // base64
-  mimeType  String   @default("image/jpeg")
+  source    String   @default("")  // 출처 (예: 2025학년도 수능 수학 29번)
   unit      String   @default("")
-  memo      String   @default("")
-  aiNote    String   @default("")
+  aiNote    String   @default("")  // AI 분석 텍스트 (편집 가능)
+  memo      String   @default("")  // 내 생각/메모
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
