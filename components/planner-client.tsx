@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Sparkles, ChevronLeft, ChevronRight, Check, Calendar, BookOpen } from "lucide-react";
+import { Trash2, Sparkles, ChevronLeft, ChevronRight, Check, Calendar, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
