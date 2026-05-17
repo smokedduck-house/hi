@@ -63,6 +63,7 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState(addDays(today(), 89)); // 기본 90일
   const [taskInfo, setTaskInfo] = useState("");
+  const [dailyCapacity, setDailyCapacity] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -78,7 +79,7 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
       const res = await fetch("/api/planner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), startDate, endDate, taskInfo: taskInfo.trim(), description: description.trim() }),
+        body: JSON.stringify({ title: title.trim(), startDate, endDate, taskInfo: taskInfo.trim(), dailyCapacity: dailyCapacity.trim(), description: description.trim() }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -133,21 +134,34 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
           <textarea
             value={taskInfo}
             onChange={(e) => setTaskInfo(e.target.value)}
-            placeholder={"인강 목록, 교재 범위 등 자유롭게 붙여넣으세요.\n\n예시:\n뉴런 수학2 강의목록:\n1강 집합의 뜻과 표현\n2강 집합의 연산\n3강 명제\n...\n\n수능특강 영어 1~15강\n국어 기출 2020~2024 총 150문제"}
-            rows={10}
+            placeholder={"해야 할 것들을 자유롭게 붙여넣으세요.\n\n예시:\n뉴런 수학2 강의목록:\n1강 집합의 뜻과 표현\n2강 집합의 연산\n...\n\n수능특강 영어 1~20강\n국어 기출 2020~2024 (총 150문제)"}
+            rows={9}
             className="w-full rounded-lg px-3 py-2 text-sm border outline-none resize-y"
+            style={textareaStyle}
+          />
+        </div>
+
+        {/* 하루 가능한 양 */}
+        <div className="space-y-1">
+          <label style={labelStyle}>하루에 가능한 양 (선택 — 없으면 AI가 알아서 판단)</label>
+          <textarea
+            value={dailyCapacity}
+            onChange={(e) => setDailyCapacity(e.target.value)}
+            placeholder={"예: 수학 인강 하루 최대 2강\n영어 기출 하루 10문제\n국어는 매일 꼭 포함"}
+            rows={3}
+            className="w-full rounded-lg px-3 py-2 text-sm border outline-none resize-none"
             style={textareaStyle}
           />
         </div>
 
         {/* 추가 요청 */}
         <div className="space-y-1">
-          <label style={labelStyle}>AI에게 추가 요청 (선택)</label>
+          <label style={labelStyle}>기타 요청 (선택)</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder={"예: 수학은 오전에 몰아서 해줘\n주말은 최대한 쉬고 싶어\n영어는 매일 조금씩 넣어줘"}
-            rows={3}
+            placeholder={"예: 수학은 오전에 몰아서\n주말은 최대한 쉬게\n시험 2주 전부터는 기출만"}
+            rows={2}
             className="w-full rounded-lg px-3 py-2 text-sm border outline-none resize-none"
             style={textareaStyle}
           />
