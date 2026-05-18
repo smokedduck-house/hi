@@ -1,7 +1,25 @@
+export type TaskType = "인강" | "문제집" | "암기" | "기타";
+
 export type PlannerTask = {
   name: string;
   totalCount: number;
   unit: string;
+  taskType: TaskType;
+  minutesPerUnit: number; // 단위당 예상 소요시간(분)
+  priority: number;       // 1(높음) ~ 5(낮음)
+  deadline?: string;      // YYYY-MM-DD, 없으면 플랜 종료일
+};
+
+export type PlanConfig = {
+  dailyMinutes: number;   // 하루 가용 학습시간(분)
+  restDays: string[];     // ["일"] 또는 특정 날짜 "2026-06-01"
+};
+
+// ── schedule JSON 형식 ─────────────────────────────────────────
+// { __meta__: PlanConfig, "YYYY-MM-DD": { taskName: amount }, ... }
+export type ScheduleJson = {
+  __meta__?: PlanConfig;
+  [date: string]: Record<string, number> | PlanConfig | undefined;
 };
 
 export function dateRange(start: string, end: string): string[] {
@@ -19,68 +37,109 @@ function dayOfWeek(dateStr: string): number {
   return new Date(dateStr).getDay(); // 0=일, 6=토
 }
 
-// 총량을 기간에 맞게 자동 분배
-// 평일=1.0, 토=0.7, 일=0.5 비율로 균등 배분
+function isRestDay(dateStr: string, restDays: string[]): boolean {
+  const dow = dayOfWeek(dateStr);
+  const dowNames = ["일", "월", "화", "수", "목", "금", "토"];
+  return restDays.includes(dowNames[dow]) || restDays.includes(dateStr);
+}
+
+// 폴백용 단순 자동 분배 (AI 실패 시)
 export function buildSchedule(
   dates: string[],
-  tasks: PlannerTask[]
-): Record<string, Record<string, number>> {
-  if (dates.length === 0 || tasks.length === 0) {
-    return Object.fromEntries(dates.map((d) => [d, {}]));
+  tasks: PlannerTask[],
+  config?: PlanConfig
+): ScheduleJson {
+  const restDays = config?.restDays ?? [];
+  const activeDates = dates.filter((d) => !isRestDay(d, restDays));
+
+  if (activeDates.length === 0 || tasks.length === 0) {
+    const empty: ScheduleJson = { __meta__: config };
+    dates.forEach((d) => { (empty as Record<string, unknown>)[d] = {}; });
+    return empty;
   }
 
-  // 날짜 유형별 카운트
-  const wds = dates.filter((d) => dayOfWeek(d) !== 0 && dayOfWeek(d) !== 6).length;
-  const sats = dates.filter((d) => dayOfWeek(d) === 6).length;
-  const suns = dates.filter((d) => dayOfWeek(d) === 0).length;
+  const wds = activeDates.filter((d) => dayOfWeek(d) !== 0 && dayOfWeek(d) !== 6).length;
+  const sats = activeDates.filter((d) => dayOfWeek(d) === 6).length;
+  const suns = activeDates.filter((d) => dayOfWeek(d) === 0).length;
   const effectiveDays = wds + sats * 0.7 + suns * 0.5 || 1;
 
-  // 각 task의 하루 목표량 계산
   const dailyMap: Record<string, { wd: number; sat: number; sun: number }> = {};
   for (const task of tasks) {
     const perWd = Math.max(1, Math.ceil(task.totalCount / effectiveDays));
-    const perSat = Math.max(0, Math.round(perWd * 0.7));
-    const perSun = Math.max(0, Math.round(perWd * 0.5));
-    dailyMap[task.name] = { wd: perWd, sat: perSat, sun: perSun };
+    dailyMap[task.name] = {
+      wd: perWd,
+      sat: Math.max(0, Math.round(perWd * 0.7)),
+      sun: Math.max(0, Math.round(perWd * 0.5)),
+    };
   }
 
-  // 남은 수량 추적
   const remaining: Record<string, number> = {};
   tasks.forEach((t) => (remaining[t.name] = t.totalCount));
 
-  const schedule: Record<string, Record<string, number>> = {};
+  const schedule: ScheduleJson = { __meta__: config };
 
   for (const date of dates) {
+    if (isRestDay(date, restDays)) {
+      (schedule as Record<string, unknown>)[date] = {};
+      continue;
+    }
     const dow = dayOfWeek(date);
-    schedule[date] = {};
+    const dayEntry: Record<string, number> = {};
 
     for (const task of tasks) {
       const left = remaining[task.name];
       if (left <= 0) continue;
-
       const daily = dailyMap[task.name];
       let amount = dow === 0 ? daily.sun : dow === 6 ? daily.sat : daily.wd;
       amount = Math.max(0, Math.min(amount, left));
-
       if (amount > 0) {
-        schedule[date][task.name] = amount;
+        dayEntry[task.name] = amount;
         remaining[task.name] -= amount;
       }
     }
+    (schedule as Record<string, unknown>)[date] = dayEntry;
   }
 
-  // 기간 내 다 못 끝낸 경우 마지막 평일에 몰아넣기
-  const leftOverTasks = tasks.filter((t) => remaining[t.name] > 0);
-  if (leftOverTasks.length > 0) {
-    const lastWeekday =
-      [...dates].reverse().find((d) => dayOfWeek(d) !== 0 && dayOfWeek(d) !== 6) ??
-      dates[dates.length - 1];
-    for (const task of leftOverTasks) {
-      schedule[lastWeekday][task.name] =
-        (schedule[lastWeekday][task.name] ?? 0) + remaining[task.name];
-      remaining[task.name] = 0;
+  // 남은 분량 마지막 평일에 몰아넣기
+  const leftover = tasks.filter((t) => remaining[t.name] > 0);
+  if (leftover.length > 0) {
+    const lastWd =
+      [...activeDates].reverse().find((d) => dayOfWeek(d) !== 0 && dayOfWeek(d) !== 6) ??
+      activeDates[activeDates.length - 1];
+    for (const task of leftover) {
+      const entry = ((schedule as Record<string, unknown>)[lastWd] ?? {}) as Record<string, number>;
+      entry[task.name] = (entry[task.name] ?? 0) + remaining[task.name];
+      (schedule as Record<string, unknown>)[lastWd] = entry;
     }
   }
 
   return schedule;
+}
+
+// AI 응답(schedule 배열) → 내부 ScheduleJson 변환
+export function aiResponseToSchedule(
+  aiSchedule: Array<{ date: string; tasks: Array<{ itemName: string; amount: number }> }>,
+  config?: PlanConfig
+): ScheduleJson {
+  const result: ScheduleJson = { __meta__: config };
+  for (const day of aiSchedule) {
+    const entry: Record<string, number> = {};
+    for (const t of day.tasks) {
+      entry[t.itemName] = (entry[t.itemName] ?? 0) + t.amount;
+    }
+    (result as Record<string, unknown>)[day.date] = entry;
+  }
+  return result;
+}
+
+// schedule JSON에서 날짜별 항목 추출 (timetable·planner 뷰용)
+export function getDaySchedule(schedule: ScheduleJson, date: string): Record<string, number> {
+  const val = (schedule as Record<string, unknown>)[date];
+  if (!val || typeof val !== "object" || Array.isArray(val)) return {};
+  // __meta__는 제외
+  return val as Record<string, number>;
+}
+
+export function getMeta(schedule: ScheduleJson): PlanConfig | undefined {
+  return schedule.__meta__;
 }

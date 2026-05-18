@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Trash2, ChevronLeft, ChevronRight, Check, Calendar, BookOpen, Plus, Loader2 } from "lucide-react";
+import { Trash2, ChevronLeft, ChevronRight, Check, Calendar, BookOpen, Plus, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 
-import type { PlannerTask } from "@/lib/planner-utils";
+import type { PlannerTask, PlanConfig } from "@/lib/planner-utils";
 
 // ── 타입 ────────────────────────────────────────────────────────
 type Plan = {
@@ -57,6 +57,8 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
   const [title, setTitle] = useState("");
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState(addDays(today(), 89));
+  const [dailyMinutes, setDailyMinutes] = useState("240");
+  const [restDays, setRestDays] = useState<string[]>(["일"]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -73,7 +75,13 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
       const res = await fetch("/api/planner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), startDate, endDate }),
+        body: JSON.stringify({
+          title: title.trim(),
+          startDate,
+          endDate,
+          dailyMinutes: Number(dailyMinutes) || 240,
+          restDays,
+        }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -116,6 +124,44 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
           </div>
         </div>
 
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label style={labelStyle}>하루 가용 시간 (분)</label>
+            <Input
+              type="number"
+              value={dailyMinutes}
+              onChange={(e) => setDailyMinutes(e.target.value)}
+              placeholder="240"
+              style={inputStyle}
+              min={30}
+            />
+          </div>
+          <div className="space-y-1">
+            <label style={labelStyle}>휴식일</label>
+            <div className="flex flex-wrap gap-1">
+              {["월", "화", "수", "목", "금", "토", "일"].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() =>
+                    setRestDays((prev) =>
+                      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]
+                    )
+                  }
+                  className="px-2 py-1 rounded text-xs border font-medium"
+                  style={{
+                    background: restDays.includes(d) ? "var(--primary)" : "transparent",
+                    color: restDays.includes(d) ? "var(--primary-foreground)" : "var(--muted-foreground)",
+                    borderColor: restDays.includes(d) ? "var(--primary)" : "var(--border)",
+                  }}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {error && (
           <p className="text-sm px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.1)", color: "var(--destructive)" }}>
             {error}
@@ -133,6 +179,14 @@ function CreateForm({ onCreated }: { onCreated: (plan: Plan) => void }) {
   );
 }
 
+// ── 헬퍼 함수 ───────────────────────────────────────────────────
+function defaultMinutesPerUnit(taskType: string, unit: string): number {
+  if (taskType === "인강") return unit === "강" ? 50 : 30;
+  if (taskType === "문제집") return unit === "문제" ? 3 : 4;
+  if (taskType === "암기") return unit === "개" ? 0.3 : 5;
+  return 5;
+}
+
 // ── 할 일 관리 ───────────────────────────────────────────────────
 function TaskManager({
   plan,
@@ -146,6 +200,10 @@ function TaskManager({
   const [name, setName] = useState("");
   const [totalCount, setTotalCount] = useState("");
   const [unit, setUnit] = useState("강");
+  const [taskType, setTaskType] = useState<string>("인강");
+  const [minutesPerUnit, setMinutesPerUnit] = useState<string>("");
+  const [priority, setPriority] = useState<string>("3");
+  const [deadline, setDeadline] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -174,11 +232,21 @@ function TaskManager({
     if (!total || total <= 0) { setError("수량을 입력해주세요."); return; }
     if (tasks.find((t) => t.name === n)) { setError("같은 이름의 할 일이 이미 있습니다."); return; }
 
-    const newTask: PlannerTask = { name: n, totalCount: total, unit };
+    const newTask: PlannerTask = {
+      name: n,
+      totalCount: total,
+      unit,
+      taskType: taskType as "인강" | "문제집" | "암기" | "기타",
+      minutesPerUnit: Number(minutesPerUnit) || defaultMinutesPerUnit(taskType, unit),
+      priority: Number(priority) || 3,
+      deadline: deadline || undefined,
+    };
     setError("");
     await saveTasks([...tasks, newTask]);
     setName("");
     setTotalCount("");
+    setMinutesPerUnit("");
+    setDeadline("");
   }
 
   async function removeTask(taskName: string) {
@@ -200,7 +268,8 @@ function TaskManager({
               <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: TASK_COLORS[i % TASK_COLORS.length] }} />
               <span className="font-medium flex-1 truncate">{t.name}</span>
               <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                총 {t.totalCount}{t.unit}
+                {t.taskType} · 총 {t.totalCount}{t.unit} · P{t.priority}
+                {t.deadline && ` · ~${t.deadline}`}
               </span>
               <button
                 onClick={() => void removeTask(t.name)}
@@ -257,6 +326,51 @@ function TaskManager({
           </select>
         </div>
 
+        <div className="grid grid-cols-3 gap-2">
+          {/* 종류 */}
+          <select
+            value={taskType}
+            onChange={(e) => setTaskType(e.target.value)}
+            className="rounded-lg px-2 py-1.5 text-sm border"
+            style={{ ...inputStyle, color: "var(--foreground)" }}
+          >
+            {["인강", "문제집", "암기", "기타"].map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          {/* 단위당 분 */}
+          <Input
+            type="number"
+            value={minutesPerUnit}
+            onChange={(e) => setMinutesPerUnit(e.target.value)}
+            placeholder={`${defaultMinutesPerUnit(taskType, unit)}분/${unit}`}
+            style={inputStyle}
+            min={1}
+          />
+          {/* 우선순위 */}
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            className="rounded-lg px-2 py-1.5 text-sm border"
+            style={{ ...inputStyle, color: "var(--foreground)" }}
+          >
+            {[1,2,3,4,5].map((p) => (
+              <option key={p} value={p}>우선순위 {p}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <div className="flex-1 space-y-0.5">
+            <p style={{ fontSize: "0.7rem", color: "var(--muted-foreground)" }}>마감일 (선택)</p>
+            <Input
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
+        </div>
+
         {error && (
           <p className="text-xs px-2 py-1 rounded" style={{ background: "rgba(239,68,68,0.1)", color: "var(--destructive)" }}>
             {error}
@@ -283,6 +397,13 @@ function ScheduleView({
   onBack: () => void;
 }) {
   const [plan, setPlan] = useState(initialPlan);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+  const [aiSummary, setAiSummary] = useState<{
+    totalDays: number;
+    avgDailyMinutes: number;
+    completionByItem: Array<{ itemName: string; completionRate: number; finishDate: string }>;
+  } | null>(null);
   const schedule: Record<string, Record<string, number>> = JSON.parse(plan.schedule || "{}");
   const tasks: PlannerTask[] = JSON.parse(plan.tasks || "[]");
   const taskColors: Record<string, string> = {};
@@ -299,6 +420,30 @@ function ScheduleView({
   function handlePlanUpdate(updated: Plan) {
     setPlan(updated);
     setCompletions(updated.completions ?? []);
+  }
+
+  async function runAiSchedule() {
+    setAiLoading(true);
+    setAiWarnings([]);
+    try {
+      const res = await fetch(`/api/planner/${plan.id}/ai-schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}), // config는 서버에서 schedule.__meta__에서 읽음
+      });
+      const data = await res.json() as {
+        plan: Plan;
+        summary: typeof aiSummary;
+        warnings: string[];
+      };
+      handlePlanUpdate(data.plan);
+      setAiSummary(data.summary);
+      if (data.warnings?.length) setAiWarnings(data.warnings);
+    } catch {
+      setAiWarnings(["AI 분배 중 오류가 발생했습니다."]);
+    } finally {
+      setAiLoading(false);
+    }
   }
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -345,6 +490,59 @@ function ScheduleView({
 
       {/* 할 일 관리 */}
       <TaskManager plan={plan} onPlanUpdate={handlePlanUpdate} />
+
+      {/* AI 자동 분배 */}
+      {tasks.length > 0 && (
+        <div className="rounded-xl border p-4 space-y-3" style={{ background: "var(--card)", borderColor: "var(--border)" }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold">AI 자동 분배</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>
+                Gemini가 우선순위·마감일·종류를 고려해 최적 일정을 짭니다.
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void runAiSchedule()}
+              disabled={aiLoading}
+              style={{ background: "var(--primary)", color: "var(--primary-foreground)" }}
+            >
+              {aiLoading
+                ? <><Loader2 size={13} className="mr-1.5 animate-spin" />분배 중...</>
+                : <><Sparkles size={13} className="mr-1.5" />AI로 분배</>
+              }
+            </Button>
+          </div>
+
+          {aiWarnings.length > 0 && (
+            <div className="space-y-1">
+              {aiWarnings.map((w, i) => (
+                <p key={i} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: "rgba(239,68,68,0.08)", color: "var(--destructive)" }}>
+                  ⚠️ {w}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {aiSummary && (
+            <div className="rounded-lg p-3 space-y-1.5" style={{ background: "var(--muted)" }}>
+              <p className="text-xs font-semibold">분배 결과</p>
+              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+                평균 {aiSummary.avgDailyMinutes}분/일 · {aiSummary.totalDays}일
+              </p>
+              {aiSummary.completionByItem.map((item) => (
+                <div key={item.itemName} className="flex justify-between text-xs">
+                  <span>{item.itemName}</span>
+                  <span style={{ color: item.completionRate >= 1 ? "#10b981" : "var(--destructive)" }}>
+                    {Math.round(item.completionRate * 100)}% · {item.finishDate}까지
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 할 일이 없으면 스케줄 미표시 */}
       {tasks.length === 0 ? (

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { buildSchedule, dateRange } from "@/lib/planner-utils";
-import type { PlannerTask } from "@/lib/planner-utils";
+import { buildSchedule, dateRange, getMeta } from "@/lib/planner-utils";
+import type { PlannerTask, ScheduleJson } from "@/lib/planner-utils";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -21,8 +21,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const existing = await prisma.studyPlan.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // 기존 schedule에 저장된 config(dailyMinutes, restDays) 유지
+  const existingSchedule = JSON.parse(existing.schedule || "{}") as ScheduleJson;
+  const config = getMeta(existingSchedule);
+
   const dates = dateRange(existing.startDate, existing.endDate);
-  const newSchedule = buildSchedule(dates, tasks);
+  const newSchedule = buildSchedule(dates, tasks, config);
 
   const updated = await prisma.studyPlan.update({
     where: { id },
