@@ -110,7 +110,7 @@ export function DashboardClient({ recentExams, topWrongUnits, wrongTypeDistribut
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-semibold text-sm leading-tight">{exam.name}</p>
+                      <Link href={`/exams/${exam.id}`} className="font-semibold text-sm leading-tight hover:underline">{exam.name}</Link>
                       <p className="text-xs mt-0.5" style={{ color: "var(--muted-foreground)" }}>
                         {new Date(exam.date).toLocaleDateString("ko-KR")} · {exam.type}
                       </p>

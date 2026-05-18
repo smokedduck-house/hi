@@ -16,6 +16,9 @@ type ExamDataQuestion = {
   answer: string | null;
   score: number;
   correctRate: number | null;
+  wrongRate: number | null;
+  unit: string;
+  topic: string;
 };
 type ExamDataSubject = {
   name: string;
@@ -23,7 +26,7 @@ type ExamDataSubject = {
   cutoffs: Record<string, { rawScore?: number; standardScore?: number }> | null;
   questions: ExamDataQuestion[];
 };
-type ExamDataEntry = { name: string; year: number; type: string; subjects: ExamDataSubject[] };
+type ExamDataEntry = { name: string; date: string; year: number; type: string; subjects: ExamDataSubject[] };
 type ExamData = { exams: ExamDataEntry[] };
 
 type GradeResult = { number: number; correct: string; mine: string; isCorrect: boolean; score: number };
@@ -43,9 +46,10 @@ type SubjectInput = {
   // 자동채점
   myAnswers: Record<string, string>;
   gradeResults: GradeResult[] | null;
-  // 정답지 입력 (수동)
+  // 정답지 입력 (수동 / 배점 데이터 있는 교육청용)
   answerKeyCount: string; // 총 문항 수
-  answerKey: Record<string, string>; // { "1": "3", "2": "1", ... }
+  answerKey: Record<string, string>; // { "1": "3", ... } 정답
+  manualCorrectAnswers: Record<string, string>; // 교육청: 사용자가 직접 입력한 정답
   // 국어 시간
   timings: Timings;
   expanded: boolean;
@@ -57,11 +61,11 @@ type ExamType = (typeof TYPES)[number];
 
 const MONTHS_BY_TYPE: Record<ExamType, number[]> = {
   평가원: [6, 9, 11],
-  교육청: [3, 4, 7, 10, 11],
+  교육청: [3, 4, 5, 7, 10],
   사설: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
 };
 
-const YEARS = [2023, 2024, 2025, 2026, 2027];
+const YEARS = [2021, 2022, 2023, 2024, 2025, 2026, 2027];
 
 const SUBJECT_OPTIONS: Record<string, string[]> = {
   국어: ["화법과작문"],
@@ -87,9 +91,16 @@ function buildExamInfo(type: ExamType | "", year: number | null, month: number |
 
 // ── exam_data.json에서 매칭 찾기 ─────────────────────────────
 function findExamEntry(data: ExamData | null, year: number, month: number, type: ExamType): ExamDataEntry | null {
-  if (!data || type !== "평가원") return null;
-  const examType = month === 11 ? "수능" : `${month}월 모평`;
-  return data.exams.find((e) => e.year === year && e.type === examType) ?? null;
+  if (!data) return null;
+  if (type === "평가원") {
+    const examType = month === 11 ? "수능" : `${month}월 모평`;
+    return data.exams.find((e) => e.year === year && e.type === examType) ?? null;
+  }
+  if (type === "교육청") {
+    // 교육청은 year(실제연도)와 date의 월로 매칭
+    return data.exams.find((e) => e.type === "교육청" && e.year === year && new Date(e.date).getUTCMonth() + 1 === month) ?? null;
+  }
+  return null;
 }
 
 function findSubjectEntry(entry: ExamDataEntry | null, name: string, optionName: string): ExamDataSubject | null {
@@ -126,6 +137,7 @@ function defaultSubject(name: string): SubjectInput {
     gradeResults: null,
     answerKeyCount: "",
     answerKey: {},
+    manualCorrectAnswers: {},
     timings: { hwajak: "", munhak: "", dokso: "" },
     expanded: true,
   };
@@ -235,6 +247,7 @@ function examToSubjectInputs(exam: ExamRecord): SubjectInput[] {
       gradeResults: null,
       answerKeyCount: "",
       answerKey: {},
+      manualCorrectAnswers: {},
       timings,
       expanded: true,
     };
@@ -305,8 +318,13 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
     const subEntry = findSubjectEntry(examEntry, sub.name, sub.optionName);
     if (!subEntry) return;
 
+    const hasRealAnswers = subEntry.questions.some((q) => q.answer !== null);
+
     const results: GradeResult[] = subEntry.questions.map((q) => {
-      const correct = q.answer ?? "";
+      // 정답 우선순위: exam_data.json 정답 → 사용자 입력 정답(manualCorrectAnswers) → answerKey
+      const correct =
+        (hasRealAnswers ? (q.answer ?? "") : "") ||
+        (sub.manualCorrectAnswers[String(q.number)] ?? "");
       const mine = sub.myAnswers[String(q.number)] ?? "";
       const isCorrect = correct !== "" && mine !== "" && correct === mine;
       return { number: q.number, correct, mine, isCorrect, score: q.score };
@@ -314,7 +332,6 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
 
     const rawScore = results.reduce((s, r) => s + (r.isCorrect ? r.score : 0), 0);
 
-    // 컷오프로 등급 자동 계산
     let grade = "";
     if (subEntry.cutoffs) {
       for (let g = 1; g <= 9; g++) {
@@ -360,7 +377,8 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                 .filter((r) => !r.isCorrect && r.mine !== "")
                 .map((r) => ({
                   number: r.number,
-                  unit: "",
+                  unit: subEntry?.questions.find((q) => q.number === r.number)?.unit ?? "",
+                  topic: subEntry?.questions.find((q) => q.number === r.number)?.topic ?? "",
                   difficulty: "중",
                   isCorrect: false,
                   wrongType: null,
@@ -373,7 +391,8 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                 .filter((n) => /^\d+$/.test(n))
                 .map((n) => ({
                   number: Number(n),
-                  unit: "",
+                  unit: subEntry?.questions.find((q) => q.number === Number(n))?.unit ?? "",
+                  topic: subEntry?.questions.find((q) => q.number === Number(n))?.topic ?? "",
                   difficulty: "중",
                   isCorrect: false,
                 }));
@@ -555,7 +574,10 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
           {/* ── 각 과목 카드 ── */}
           {subjects.map((sub, subIdx) => {
             const subEntry = findSubjectEntry(examEntry, sub.name, sub.optionName);
-            const hasAutoGrade = !!subEntry;
+            const hasAnswers = !!subEntry && subEntry.questions.some((q) => q.answer !== null);
+            const hasScoreData = !!subEntry; // 배점/단원 데이터 보유 (교육청 포함)
+            const hasAutoGrade = hasAnswers; // 기존 자동채점 (정답 있을 때)
+            const hasBaejumGrade = hasScoreData && !hasAnswers; // 배점은 있지만 정답 없음 (교육청/2021-2023)
             const graded = !!sub.gradeResults;
             const correctCount = sub.gradeResults?.filter((r) => r.isCorrect).length ?? 0;
             const totalQ = subEntry?.questions.length ?? 0;
@@ -575,10 +597,16 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-bold">{sub.name}</span>
                     {sub.optionName && <Badge variant="secondary">{sub.optionName}</Badge>}
-                    {hasAutoGrade && (
+                    {hasAnswers && (
                       <span className="flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full font-medium"
                         style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>
                         <Zap size={10} /> 자동채점
+                      </span>
+                    )}
+                    {hasBaejumGrade && (
+                      <span className="flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
+                        <Zap size={10} /> 배점·단원 데이터
                       </span>
                     )}
                     {graded && (
@@ -612,12 +640,11 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                       </div>
                     )}
 
-                    {/* ── 자동채점 (exam_data.json 있을 때) ── */}
-                    {hasAutoGrade && subEntry && (
+                    {/* ── 자동채점 (정답 있을 때) ── */}
+                    {hasAnswers && subEntry && (
                       <div className="space-y-3">
                         <p style={labelStyle}>내 답 입력 (자동채점)</p>
 
-                        {/* 정답 & 내 답 그리드 */}
                         <div className="space-y-2">
                           <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>정답</p>
                           <div className="flex flex-wrap gap-1.5">
@@ -666,7 +693,6 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                                 오답: {sub.gradeResults.filter((r) => !r.isCorrect && r.mine !== "").map((r) => `${r.number}번`).join(", ")}
                               </p>
                             )}
-                            {/* 등급컷 대조 */}
                             {subEntry.cutoffs && (
                               <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
                                 {Object.entries(subEntry.cutoffs)
@@ -681,9 +707,81 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                       </div>
                     )}
 
+                    {/* ── 교육청/구형 평가원: 배점 데이터 있지만 정답 없음 → 정답 직접 입력 후 채점 ── */}
+                    {hasBaejumGrade && subEntry && (
+                      <div className="space-y-3">
+                        <p style={labelStyle}>정답 입력 후 채점 (배점 자동 적용)</p>
+                        <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>정답을 직접 입력하면 배점 기준으로 자동채점됩니다.</p>
+
+                        <div className="space-y-2">
+                          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+                            정답 (직접 입력) — 배점: {subEntry.questions.map((q) => `${q.number}번 ${q.score}점`).slice(0, 5).join(", ")}...
+                          </p>
+                          <div className="answer-cells flex flex-wrap gap-1.5">
+                            {subEntry.questions.map((q) => (
+                              <AnswerCell
+                                key={q.number}
+                                num={q.number}
+                                value={sub.manualCorrectAnswers[String(q.number)] ?? ""}
+                                onChange={(v) =>
+                                  updateSubject(subIdx, {
+                                    manualCorrectAnswers: { ...sub.manualCorrectAnswers, [String(q.number)]: v },
+                                    gradeResults: null,
+                                  })
+                                }
+                                highlight="correct-answer"
+                                autoAdvance
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>내 답</p>
+                          <div className="answer-cells flex flex-wrap gap-1.5">
+                            {subEntry.questions.map((q) => {
+                              const gr = sub.gradeResults?.find((r) => r.number === q.number);
+                              return (
+                                <AnswerCell
+                                  key={q.number}
+                                  num={q.number}
+                                  value={sub.myAnswers[String(q.number)] ?? ""}
+                                  onChange={(v) =>
+                                    updateSubject(subIdx, {
+                                      myAnswers: { ...sub.myAnswers, [String(q.number)]: v },
+                                      gradeResults: null,
+                                    })
+                                  }
+                                  highlight={gr ? (gr.isCorrect ? "correct" : "wrong") : undefined}
+                                  autoAdvance
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <Button type="button" size="sm" onClick={() => runGrade(subIdx)}>
+                          <CheckCircle2 size={13} className="mr-1" /> 채점하기
+                        </Button>
+
+                        {sub.gradeResults && (
+                          <div className="rounded-xl p-3 space-y-1" style={{ background: "var(--muted)" }}>
+                            <p className="text-sm font-bold">
+                              {rawFromGrade}점 · {correctCount}/{totalQ} 정답
+                            </p>
+                            {sub.gradeResults.filter((r) => !r.isCorrect && r.mine !== "").length > 0 && (
+                              <p className="text-xs" style={{ color: "var(--destructive)" }}>
+                                오답: {sub.gradeResults.filter((r) => !r.isCorrect && r.mine !== "").map((r) => `${r.number}번`).join(", ")}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* ── 수동 점수 입력 ── */}
                     <div className="space-y-2">
-                      <p style={labelStyle}>성적 {hasAutoGrade ? "(채점 후 자동 입력)" : ""}</p>
+                      <p style={labelStyle}>성적 {(hasAnswers || hasBaejumGrade) ? "(채점 후 자동 입력)" : ""}</p>
                       <div className="grid grid-cols-4 gap-2">
                         {[
                           { label: "원점수", key: "rawScore", ph: "0" },
@@ -705,8 +803,8 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                       </div>
                     </div>
 
-                    {/* ── 정답지 입력 (수동 모드만) ── */}
-                    {!hasAutoGrade && (
+                    {/* ── 정답지 입력 (완전 수동 모드만 — 배점 데이터도 없을 때) ── */}
+                    {!hasScoreData && (
                       <div className="space-y-3">
                         <div className="flex items-center gap-3">
                           <p style={labelStyle}>정답지 입력</p>
@@ -747,7 +845,7 @@ export function ExamNewClient({ units, initialExam }: { units: Unit[]; initialEx
                     )}
 
                     {/* ── 오답 번호 (수동 모드만) ── */}
-                    {!hasAutoGrade && (
+                    {!hasScoreData && (
                       <div className="space-y-2">
                         <p style={labelStyle}>오답 문항 번호</p>
                         <Input
