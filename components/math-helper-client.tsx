@@ -467,9 +467,8 @@ type ProblemEntry = {
   id: string;
   image: { base64: string; mimeType: string } | null;
   status: "idle" | "analyzing" | "done" | "error";
-  result?: ExamResult;
-  savedOdapId?: string;
-  savedOptId?: string;
+  results?: ExamResult[];  // 사진 1장에 여러 문제 가능
+  savedIds?: Array<{ odapId?: string; optId?: string }>;
   errorMsg?: string;
   expanded: boolean;
 };
@@ -580,45 +579,51 @@ function ExamTab() {
           continue;
         }
 
-        const result = await res.json() as ExamResult;
-        const numLabel = result.problemNum || "";
-        const sourceLabel = [examSource || "모의고사", numLabel ? `${numLabel}번` : ""].filter(Boolean).join(" ");
-        let savedOdapId: string | undefined;
-        let savedOptId: string | undefined;
+        const results = await res.json() as ExamResult[];
+        const savedIds: Array<{ odapId?: string; optId?: string }> = [];
 
-        // AI가 틀렸다고 판단 → 오답정리 자동 저장
-        if (result.isWrong) {
-          const saveRes = await fetch("/api/math-problems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source: sourceLabel,
-              problem: result.problemText,
-              aiNote: `[틀린 이유]\n${result.wrongReason}\n\n[올바른 풀이]\n${result.solution}\n\n[개념]\n${result.concept}`,
-              category: "오답",
-            }),
-          });
-          savedOdapId = (await saveRes.json()).id;
-        }
+        for (const result of results) {
+          const numLabel = result.problemNum || "";
+          const sourceLabel = [examSource || "모의고사", numLabel ? `${numLabel}번` : ""].filter(Boolean).join(" ");
+          let odapId: string | undefined;
+          let optId: string | undefined;
 
-        // AI가 최적화 가능하다고 판단 → 최적화 후보 저장
-        if (result.isOptimizable) {
-          const saveRes = await fetch("/api/math-problems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source: sourceLabel,
-              problem: result.problemText,
-              aiNote: `[최적화 팁]\n${result.optimizeTip}\n\n[개념]\n${result.concept}`,
-              category: "최적화",
-            }),
-          });
-          savedOptId = (await saveRes.json()).id;
+          // AI가 틀렸다고 판단 → 오답정리 자동 저장
+          if (result.isWrong) {
+            const saveRes = await fetch("/api/math-problems", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                source: sourceLabel,
+                problem: result.problemText,
+                aiNote: `[틀린 이유]\n${result.wrongReason}\n\n[올바른 풀이]\n${result.solution}\n\n[개념]\n${result.concept}`,
+                category: "오답",
+              }),
+            });
+            odapId = (await saveRes.json()).id;
+          }
+
+          // AI가 최적화 가능하다고 판단 → 최적화 후보 저장
+          if (result.isOptimizable) {
+            const saveRes = await fetch("/api/math-problems", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                source: sourceLabel,
+                problem: result.problemText,
+                aiNote: `[최적화 팁]\n${result.optimizeTip}\n\n[개념]\n${result.concept}`,
+                category: "최적화",
+              }),
+            });
+            optId = (await saveRes.json()).id;
+          }
+
+          savedIds.push({ odapId, optId });
         }
 
         doneCount.current++;
         setProblems((p) => p.map((x) =>
-          x.id === prob.id ? { ...x, status: "done", result, savedOdapId, savedOptId, expanded: true } : x
+          x.id === prob.id ? { ...x, status: "done", results, savedIds, expanded: true } : x
         ));
       } catch {
         setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, status: "error", errorMsg: "네트워크 오류" } : x));
@@ -629,8 +634,9 @@ function ExamTab() {
   }
 
   const doneProblems = problems.filter((p) => p.status === "done");
-  const wrongCount = doneProblems.filter((p) => p.result?.isWrong).length;
-  const optCount = doneProblems.filter((p) => p.result?.isOptimizable).length;
+  const allResults = doneProblems.flatMap((p) => p.results ?? []);
+  const wrongCount = allResults.filter((r) => r.isWrong).length;
+  const optCount = allResults.filter((r) => r.isOptimizable).length;
   const hasImages = problems.some((p) => p.image);
   const cardStyle = { background: "var(--card)", borderColor: "var(--border)" };
   const totalToAnalyze = problems.filter((p) => p.image && p.status !== "done").length;
@@ -673,36 +679,41 @@ function ExamTab() {
         <div className="space-y-2">
           {problems.map((prob, idx) => {
             if (!prob.image && prob.status === "idle") return null;
-            const result = prob.result;
+            const results = prob.results ?? [];
+            const wrongInPhoto = results.filter((r) => r.isWrong).length;
+            const optInPhoto = results.filter((r) => r.isOptimizable).length;
             return (
               <div key={prob.id} className="rounded-xl border" style={cardStyle}>
                 <div className="flex items-center gap-2 p-3">
                   <span className="text-xs font-bold w-5 text-center" style={{ color: "var(--muted-foreground)" }}>
                     {idx + 1}
-                    {result?.problemNum ? `(${result.problemNum}번)` : ""}
                   </span>
 
                   {/* 상태 뱃지 */}
-                  <div className="flex gap-1.5 flex-1">
+                  <div className="flex gap-1.5 flex-1 flex-wrap">
                     {prob.status === "analyzing" && (
                       <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
                         <Loader2 size={10} className="animate-spin" /> 분석 중
                       </span>
                     )}
-                    {prob.status === "done" && result && (
+                    {prob.status === "done" && results.length > 0 && (
                       <>
-                        {result.isWrong ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
+                          {results.length}문제 감지
+                        </span>
+                        {wrongInPhoto > 0 && (
                           <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
-                            ✗ 틀림 · 오답저장
-                          </span>
-                        ) : (
-                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
-                            ✓ 정답
+                            ✗ 오답 {wrongInPhoto}개
                           </span>
                         )}
-                        {result.isOptimizable && (
+                        {optInPhoto > 0 && (
                           <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(245,158,11,0.1)", color: "#f59e0b" }}>
-                            ⚡ 최적화저장
+                            ⚡ 최적화 {optInPhoto}개
+                          </span>
+                        )}
+                        {wrongInPhoto === 0 && optInPhoto === 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981" }}>
+                            ✓ 전부 정답
                           </span>
                         )}
                       </>
@@ -726,12 +737,12 @@ function ExamTab() {
                 </div>
 
                 {prob.expanded && (
-                  <div className="px-3 pb-3 border-t space-y-2 pt-3" style={{ borderColor: "var(--border)" }}>
+                  <div className="px-3 pb-3 border-t space-y-3 pt-3" style={{ borderColor: "var(--border)" }}>
                     {/* 이미지 썸네일 */}
                     {prob.image && (
                       <div className="flex items-center gap-2">
                         <img src={`data:${prob.image.mimeType};base64,${prob.image.base64}`} alt="문제"
-                          className="w-24 h-18 object-cover rounded" style={{ border: "1px solid var(--border)", maxHeight: 72 }} />
+                          className="w-24 object-cover rounded" style={{ border: "1px solid var(--border)", maxHeight: 96 }} />
                         {prob.status === "idle" && (
                           <button onClick={() => setProblems((p) => p.map((x) => x.id === prob.id ? { ...x, image: null } : x))}
                             className="text-xs px-2 py-1 rounded" style={{ background: "var(--muted)", color: "var(--muted-foreground)" }}>
@@ -741,41 +752,49 @@ function ExamTab() {
                       </div>
                     )}
 
-                    {/* 분석 결과 */}
-                    {prob.status === "done" && result && (
-                      <div className="space-y-2 text-xs">
+                    {/* 분석 결과 - 문제별로 표시 */}
+                    {prob.status === "done" && results.map((result, ri) => (
+                      <div key={ri} className="rounded-lg border space-y-2 p-2.5 text-xs" style={{ borderColor: "var(--border)" }}>
+                        <p className="font-semibold text-xs" style={{ color: "var(--muted-foreground)" }}>
+                          {result.problemNum ? `${result.problemNum}번 문제` : `문제 ${ri + 1}`}
+                          {result.isWrong
+                            ? <span className="ml-2 font-medium" style={{ color: "#ef4444" }}>✗ 틀림</span>
+                            : <span className="ml-2" style={{ color: "#10b981" }}>✓ 정답</span>
+                          }
+                          {result.isOptimizable && <span className="ml-2" style={{ color: "#f59e0b" }}>⚡ 최적화</span>}
+                        </p>
                         {result.isWrong && result.wrongReason && (
-                          <div className="rounded-lg p-2.5" style={{ background: "rgba(239,68,68,0.07)", borderLeft: "3px solid #ef4444" }}>
+                          <div className="rounded-lg p-2" style={{ background: "rgba(239,68,68,0.07)", borderLeft: "3px solid #ef4444" }}>
                             <p className="font-bold mb-1" style={{ color: "#ef4444" }}>틀린 이유</p>
                             <p className="whitespace-pre-wrap">{result.wrongReason}</p>
                           </div>
                         )}
                         {result.problemText && (
-                          <div className="rounded-lg p-2.5" style={{ background: "rgba(59,130,246,0.07)", borderLeft: "3px solid #3b82f6" }}>
+                          <div className="rounded-lg p-2" style={{ background: "rgba(59,130,246,0.07)", borderLeft: "3px solid #3b82f6" }}>
                             <p className="font-bold mb-1" style={{ color: "#3b82f6" }}>문제</p>
                             <MathRenderer text={result.problemText} />
                           </div>
                         )}
                         {result.isWrong && result.solution && (
-                          <div className="rounded-lg p-2.5" style={{ background: "var(--muted)" }}>
+                          <div className="rounded-lg p-2" style={{ background: "var(--muted)" }}>
                             <p className="font-bold mb-1" style={{ color: "#10b981" }}>올바른 풀이</p>
                             <div className="whitespace-pre-wrap"><MathRenderer text={result.solution} /></div>
                           </div>
                         )}
                         {result.concept && (
-                          <div className="rounded-lg p-2.5" style={{ background: "var(--muted)" }}>
+                          <div className="rounded-lg p-2" style={{ background: "var(--muted)" }}>
                             <p className="font-bold mb-1" style={{ color: "#8b5cf6" }}>개념</p>
                             <p className="whitespace-pre-wrap">{result.concept}</p>
                           </div>
                         )}
                         {result.isOptimizable && result.optimizeTip && (
-                          <div className="rounded-lg p-2.5" style={{ background: "rgba(245,158,11,0.07)", borderLeft: "3px solid #f59e0b" }}>
+                          <div className="rounded-lg p-2" style={{ background: "rgba(245,158,11,0.07)", borderLeft: "3px solid #f59e0b" }}>
                             <p className="font-bold mb-1" style={{ color: "#f59e0b" }}>⚡ 최적화</p>
                             <div className="whitespace-pre-wrap"><MathRenderer text={result.optimizeTip} /></div>
                           </div>
                         )}
                       </div>
-                    )}
+                    ))}
                     {prob.status === "error" && (
                       <p className="text-xs px-2 py-1.5 rounded" style={{ background: "rgba(239,68,68,0.1)", color: "var(--destructive)" }}>
                         {prob.errorMsg}
@@ -811,7 +830,7 @@ function ExamTab() {
           <p className="text-sm font-semibold">분석 결과</p>
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg p-2" style={{ background: "var(--muted)" }}>
-              <p className="text-lg font-bold">{doneProblems.length}</p>
+              <p className="text-lg font-bold">{allResults.length}</p>
               <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>분석 완료</p>
             </div>
             <div className="rounded-lg p-2" style={{ background: "rgba(239,68,68,0.07)" }}>
